@@ -15,7 +15,7 @@ print(len(dataset.nl))
 model = MyModel(cfg, len(dataset.nl)).cuda()
 optimizer = torch.optim.Adam(
         params=model.parameters(),
-        lr=cfg.TRAIN.LR.BASE_LR)
+        lr=cfg.TRAIN.LR.BASE_LR, weight_decay=0.00003)
 lr_scheduler = MultiStepLR(optimizer,
                           milestones=(30, 50, 70),
                           gamma=cfg.TRAIN.LR.WEIGHT_DECAY)

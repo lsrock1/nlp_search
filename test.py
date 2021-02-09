@@ -25,11 +25,12 @@ model = MyModel(cfg, len(dataset.nl)).cuda()
 
 loader = DataLoader(dataset, batch_size=1, shuffle=False, num_workers=cfg.TRAIN.NUM_WORKERS)
 uuids, nls = query(cfg)
-epoch = 5
-model.load_state_dict(torch.load(f'my_{epoch}.pth'))
+epoch = 2
+threshold = 0.5
+model.load_state_dict(torch.load(f'save/{epoch}.pth'))
 model.eval()
 for uuid, query_nl in zip(uuids, nls):
-    for idx, (id, frames, boxes, paths) in enumerate(loader):
+    for idx, (id, frames, boxes, paths, rois) in enumerate(loader):
         with torch.no_grad():
             frames = frames.squeeze(0)
             # print(frames.shape)
@@ -37,25 +38,45 @@ for uuid, query_nl in zip(uuids, nls):
             text = query_nl[0]
             # print(nl)
             nl = torch.tensor(dataset.nl.sentence_to_index(query_nl[0])).cuda()
-            nl = nl.unsqueeze(0).expand(b, -1)
+            nl = nl.unsqueeze(0)#.expand(b, -1)
             nl = nl.transpose(1, 0)
             frames = frames.cuda()
-            output = model(nl, frames).sigmoid()
-            for i, o in enumerate(output):
+            results = []
+            for batch_idx in range(b):
+                output = model(nl, frames[batch_idx:batch_idx+1]).sigmoid()
+                results.append(output.squeeze(0))
+            for i, o in enumerate(results):
                 # print(paths)
+                roi = [b.item() for b in rois[i]]
                 img = cv2.imread(paths[i][0])
+                o = (o > 0.5) * o
+                # calculate activation ratio in roi
+                activation_ratio = o[:, roi[1]:roi[3], roi[0]:roi[2]].sum() / ((roi[3] - roi[1]) * (roi[2] - roi[0]))
+                if activation_ratio.item() < threshold:
+                    continue
                 o = o.squeeze(0).cpu().detach().numpy() * 255
                 heatmap = cv2.applyColorMap(np.uint8(o), cv2.COLORMAP_JET)
+                # draw box to heatmap
                 heatmap = np.float32(heatmap) / 255
                 heatmap = cv2.resize(heatmap, (img.shape[1], img.shape[0]))
+                # img = cv2.resize(img, (384, 384))#(heatmap.shape[1], heatmap.shape[0]))
+
                 cam = heatmap + np.float32(img) / 255
                 cam = cam / np.max(cam)
-                # print(o.shape)
-                # print(paths[i])
+
+                # h_ratio = img.shape[0] / o.shape[0]
+                # w_ratio = img.shape[1] / o.shape[1]
+                # xyxy
+                box = [b.item() for b in boxes[i]]
+                box = tuple([int(b) for b in box])
+                cv2.rectangle(cam, box[:2], box[2:], (255,255,0), 2)
+                cam = cam * 255
+                cam = np.concatenate([cam, img], axis=1)
+
                 if not os.path.exists('results/' + query_nl[0]):
                     os.mkdir('results/' + query_nl[0])
-                cv2.imwrite(f"results/{query_nl[0]}/{idx}_{i}.png", (cam * 255).astype(np.uint8))
-
+                cv2.imwrite(f"results/{query_nl[0]}/{idx}_{i}.png", cam.astype(np.uint8))
+                print('saved: ', f"results/{query_nl[0]}/{idx}_{i}.png")
 # for epoch in range(cfg.TRAIN.EPOCH):
 #     losses = 0.
 #     precs = 0.
