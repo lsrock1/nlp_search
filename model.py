@@ -132,6 +132,7 @@ class MyModel(nn.Module):
 
         self.se = SELayer(1024)
         self.out = nn.Sequential(
+            nn.BatchNorm2d(2048), nn.ReLU(True),
             nn.Conv2d(2048, 1024, 3, padding=1), nn.BatchNorm2d(1024), nn.ReLU(True),
             nn.Conv2d(1024, 512, 3, padding=1), nn.BatchNorm2d(512), nn.ReLU(True),
             nn.Conv2d(512, 512, 3, padding=1), nn.BatchNorm2d(512), nn.ReLU(True),

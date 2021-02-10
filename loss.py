@@ -87,3 +87,17 @@ def sigmoid_focal_loss(
         loss = loss.sum()
 
     return loss
+
+
+def sampling_loss(predicted, labels, ratio=3):
+    num_of_pos = labels.sum().item()
+    num_of_neg = int(num_of_pos * ratio)
+    predicted = predicted.flatten(start_dim=1)
+    labels = labels.flatten(start_dim=1)
+
+    loss_all = F.binary_cross_entropy_with_logits(predicted, labels, reduction='none')
+
+    topk_loss_neg, _ = loss_all[labels == 0].topk(num_of_neg)
+    loss_pos = loss_all[labels == 1].sum()
+    loss_neg = topk_loss_neg.sum()
+    return (loss_pos + loss_neg) / (num_of_pos + num_of_neg)

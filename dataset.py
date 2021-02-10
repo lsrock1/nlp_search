@@ -102,8 +102,8 @@ class CityFlowNLDataset(Dataset):
                     # print('not exists', os.path.join(self.data_cfg.DATA.CITYFLOW_PATH, frame))
                     continue
                 frame_path = os.path.join(self.data_cfg.DATA.CITYFLOW_PATH, frame)
-                nl_idx = int(random.uniform(0, 3))
-                nl = track["nl"][nl_idx]
+                #nl_idx = int(random.uniform(0, 3))
+                nl = track["nl"]#[nl_idx]
                 box = track["boxes"][frame_idx]
                 crop = {"frame": frame_path, "nl": nl, "box": box}
                 self.list_of_crops.append(crop)
@@ -138,7 +138,8 @@ class CityFlowNLDataset(Dataset):
         h, w, _ = frame.shape
         frame = torch.from_numpy(frame).permute([2, 0, 1])
         box = dp["box"]
-        nl = self.nl.sentence_to_index(dp["nl"])
+        nl = dp["nl"][int(random.uniform(0, 3))]
+        nl = self.nl.sentence_to_index(nl)
         ymin, ymax = box[1], box[1] + box[3]
         xmin, xmax = box[0], box[0] + box[2]
         frame = self.transforms[0](frame)

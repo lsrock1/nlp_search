@@ -2,12 +2,12 @@ from dataset import CityFlowNLDataset
 from configs import get_default_config
 from model import MyModel
 from transforms import build_transforms
-from loss import TripletLoss, sigmoid_focal_loss
+from loss import TripletLoss, sigmoid_focal_loss, sampling_loss
 
 from torch.utils.data import DataLoader
 import torch
 from torch.optim.lr_scheduler import MultiStepLR
-
+import torch.nn.functional as F
 
 cfg = get_default_config()
 dataset = CityFlowNLDataset(cfg, build_transforms(cfg))
@@ -30,6 +30,7 @@ for epoch in range(cfg.TRAIN.EPOCH):
         # print(global_img.shape)
         # print(local_img.shape)
         nl = nl.cuda()
+        label = label.cuda()
         # global_img, local_img = global_img.cuda(), local_img.cuda()
         nl = nl.transpose(1, 0)
         frame = frame.cuda()
@@ -39,11 +40,21 @@ for epoch in range(cfg.TRAIN.EPOCH):
         # label_nl = torch.arange(nl.shape[0]).cuda()
         # label_img = label_nl.unsqueeze(1).expand(-1, cfg.DATA.NUM_IMG).flatten(start_dim=0).cuda()
         # loss, prec = triplet(nl, img_ft, label_nl, label_img)
-        loss = sigmoid_focal_loss(output, label.cuda(), reduction='sum')
+        # print(label.sum(), ' ', (label == 0).sum())
+        pred = (output.sigmoid() > 0.5)
+        # print((pred == label).sum())
+        pred = (pred == label) 
+        recall = (pred * label).sum() / label.sum()
+
+        accu = pred.sum().item() / pred.numel()
+        # print(pred.sum(), ' ', label.sum())
+        loss = sampling_loss(output, label)
+        # loss = F.binary_cross_entropy_with_logits(output, label)
+        # loss = sigmoid_focal_loss(output, label, reduction='mean')
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
         losses += loss.item()
-        # precs += prec
-        print(f'epoch: {epoch} ,step: {idx}/{len(loader)}, loss: {losses / (idx + 1)}, prec: {precs / (idx + 1)}')
+        # precs += recall.item()
+        print(f'epoch: {epoch} ,step: {idx}/{len(loader)}, loss: {losses / (idx + 1)}, recall: {recall.item()}, accuracy: {accu}')
     torch.save(model.state_dict(), f'save/{epoch}.pth')
