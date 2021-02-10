@@ -139,8 +139,12 @@ class MyModel(nn.Module):
             nn.Conv2d(512, 1, 3, padding=1))
 
     def forward(self, nl, global_img):
-        nl = self.rnn(nl)
-        img_ft = self.cnn(global_img)
+        if self.training:
+            nl = self.rnn(nl)
+            img_ft = self.cnn(global_img)
+        else:
+            img_ft = global_img
+
         img_ft_b = self.b(img_ft)
         bs, c, h, w = img_ft_b.shape
         # bs, t, hw

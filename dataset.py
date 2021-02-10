@@ -72,15 +72,19 @@ class NL:
         nl = [w for w in nl if w not in self.stop_words]
         return nl
 
-    def sentence_to_index(self, nl):
+    def sentence_to_index(self, nl, is_train=True):
         nl = self.do_clean(nl)
+
         idxs = [self.word_to_idx[n] if n in self.word_to_idx else self.word_to_idx['<UNK>'] for n in nl]
         
-        if len(idxs) > self.cfg.DATA.MAX_SENTENCE:
-            idxs = idxs[:self.cfg.DATA.MAX_SENTENCE]
-            idxs = [self.word_to_idx['<SOS>']] + idxs + [self.word_to_idx['<EOS>']]
+        if is_train:
+            if len(idxs) > self.cfg.DATA.MAX_SENTENCE:
+                idxs = idxs[:self.cfg.DATA.MAX_SENTENCE]
+                idxs = [self.word_to_idx['<SOS>']] + idxs + [self.word_to_idx['<EOS>']]
+            else:
+                idxs = [self.word_to_idx['<SOS>']] + idxs + [self.word_to_idx['<EOS>']] + [self.word_to_idx['<PAD>'] for _ in range(self.cfg.DATA.MAX_SENTENCE - len(idxs))]
         else:
-            idxs = [self.word_to_idx['<SOS>']] + idxs + [self.word_to_idx['<EOS>']] + [self.word_to_idx['<PAD>'] for _ in range(self.cfg.DATA.MAX_SENTENCE - len(idxs))]
+            idxs = [self.word_to_idx['<SOS>']] + idxs + [self.word_to_idx['<EOS>']]
         return idxs
 
 
@@ -248,7 +252,7 @@ class CityFlowNLInferenceDataset(Dataset):
             # cropped_frames.append(crop)
         # dp["crops"] = torch.stack(cropped_frames, dim=0)
         frames = torch.stack(frames, dim=0)
-        return id, frames, boxes, paths, rois
+        return id, frames, np.array(boxes), paths, np.array(rois)
 
 
 def query(data_cfg):
