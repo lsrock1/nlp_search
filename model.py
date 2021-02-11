@@ -13,27 +13,10 @@ class RNN(nn.Module):
             nn.TransformerEncoderLayer(d_model=cfg.MODEL.RNN.HIDDEN, nhead=8),
             num_layers=cfg.MODEL.RNN.LAYERS
         )
-        # nn.GRU(
-        #     input_size=cfg.MODEL.RNN.EMBEDDING,
-        #     hidden_size=cfg.MODEL.RNN.HIDDEN,
-        #     num_layers=cfg.MODEL.RNN.LAYERS,
-        #     bidirectional=True,
-        #     batch_first=True
-        # )
-        # self.linears = nn.ModuleList([
-        #     nn.Linear(cfg.MODEL.RNN.HIDDEN, cfg.MODEL.RNN.HIDDEN),
-        #     nn.Sequential(
-        #         nn.Linear(cfg.MODEL.RNN.HIDDEN, cfg.MODEL.RNN.HIDDEN//2, bias=False),
-        #         nn.BatchNorm1d(cfg.MODEL.RNN.HIDDEN//2), nn.ReLU(True),
-        #         nn.Linear(cfg.MODEL.RNN.HIDDEN//2, 1)),
-        #     nn.Sequential(
-        #         nn.Linear(cfg.MODEL.RNN.HIDDEN, cfg.MODEL.RNN.HIDDEN//2, bias=False),
-        #         nn.BatchNorm1d(cfg.MODEL.RNN.HIDDEN//2), nn.ReLU(True),
-        #         nn.Linear(cfg.MODEL.RNN.HIDDEN//2, 1))
-        # ])
 
     def forward(self, x):
         x = self.embedding(x)
+        x = F.dropout(x, training=self.training)
         x = self.rnn(x)
         length, bs, emb = x.shape
         return x.permute(1, 0, 2)
@@ -125,14 +108,13 @@ class MyModel(nn.Module):
         super().__init__()
         self.rnn = RNN(cfg, num_words)
         self.cnn = CNN(cfg)
-        self.a = nn.Linear(1024, 1024)
-        self.b = nn.Conv2d(1024, 1024, 1)
-        self.c = nn.Linear(1024, 1024)
-        self.d = nn.Conv2d(1024, 1024, 1)
+        self.a = nn.Sequential(nn.BatchNorm1d(1024), nn.Linear(1024, 1024))
+        self.b = nn.Sequential(nn.BatchNorm2d(1024), nn.Conv2d(1024, 1024, 1))
+        self.c = nn.Sequential(nn.BatchNorm1d(1024), nn.Linear(1024, 1024))
+        self.d = nn.Sequential(nn.BatchNorm2d(1024), nn.Conv2d(1024, 1024, 1))
 
         self.se = SELayer(1024)
         self.out = nn.Sequential(
-            nn.BatchNorm2d(2048), nn.ReLU(True),
             nn.Conv2d(2048, 1024, 3, padding=1), nn.BatchNorm2d(1024), nn.ReLU(True),
             nn.Conv2d(1024, 512, 3, padding=1), nn.BatchNorm2d(512), nn.ReLU(True),
             nn.Conv2d(512, 512, 3, padding=1), nn.BatchNorm2d(512), nn.ReLU(True),
@@ -145,12 +127,13 @@ class MyModel(nn.Module):
         else:
             img_ft = global_img
 
+        bs, length, emb = nl.shape
         img_ft_b = self.b(img_ft)
         bs, c, h, w = img_ft_b.shape
         # bs, t, hw
-        relation = torch.bmm(self.a(nl), img_ft_b.reshape(bs, c, -1))
+        relation = torch.bmm(self.a(nl.reshape(-1, emb)).reshape(bs, length, emb), img_ft_b.reshape(bs, c, -1))
         weights = F.softmax(relation, dim=1)
-        weighted_img_ft = torch.bmm(self.c(nl).permute(0, 2, 1), weights)
+        weighted_img_ft = torch.bmm(self.c(nl.reshape(-1, emb)).reshape(bs, length, emb).permute(0, 2, 1), weights)
         img_ft = weighted_img_ft.reshape(bs, c, h, w) + img_ft
         
         weights = F.softmax(relation, dim=2)

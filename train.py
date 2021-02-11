@@ -10,7 +10,7 @@ from torch.optim.lr_scheduler import MultiStepLR
 import torch.nn.functional as F
 
 
-resume_epoch = 29
+resume_epoch = 0
 
 cfg = get_default_config()
 dataset = CityFlowNLDataset(cfg, build_transforms(cfg))

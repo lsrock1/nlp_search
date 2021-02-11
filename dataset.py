@@ -14,8 +14,10 @@ import cv2
 import torch
 from torch.utils.data import Dataset
 from nltk.stem import PorterStemmer
+import albumentations as A
 from nltk.corpus import stopwords
-
+# import nltk
+# nltk.download('stopwords')
 
 class NL:
     def __init__(self, cfg, tracks):
@@ -42,13 +44,16 @@ class NL:
         word_count['<EOS>'] += 1
         word_count['<PAD>'] += 1
         word_count['<UNK>'] += 1
-
+        max_length = 0
         for t in tracks:
             for n in t['nl']:
-                for w in self.do_clean(n):
+                cleaned_sentence = self.do_clean(n)
+                if len(cleaned_sentence) > max_length:
+                    max_length = len(cleaned_sentence)
+                for w in cleaned_sentence:
                 # for l in n.replace('.', '').split():
                     word_count[w] += 1
-        
+        print('max: ', max_length)
         new_dict = dict()
         for k, v in word_count.items():
             if v >= self.cfg.DATA.MIN_COUNT or k in ['<SOS>', '<EOS>', '<PAD>', '<UNK>']:
@@ -69,7 +74,7 @@ class NL:
     def do_clean(self, nl):
         nl = nl[:-1].lower().split()
         nl = [self.s.stem(w) for w in nl]
-        nl = [w for w in nl if w not in self.stop_words]
+        # nl = [w for w in nl if w not in self.stop_words]
         return nl
 
     def sentence_to_index(self, nl, is_train=True):
@@ -103,14 +108,18 @@ class CityFlowNLDataset(Dataset):
         for track in self.list_of_tracks:
             for frame_idx, frame in enumerate(track["frames"]):
                 if not os.path.exists(os.path.join(self.data_cfg.DATA.CITYFLOW_PATH, frame)):
+                    print(os.path.join(self.data_cfg.DATA.CITYFLOW_PATH, frame))
                     # print('not exists', os.path.join(self.data_cfg.DATA.CITYFLOW_PATH, frame))
                     continue
                 frame_path = os.path.join(self.data_cfg.DATA.CITYFLOW_PATH, frame)
                 #nl_idx = int(random.uniform(0, 3))
                 nl = track["nl"]#[nl_idx]
                 box = track["boxes"][frame_idx]
-                crop = {"frame": frame_path, "nl": nl, "box": box}
-                self.list_of_crops.append(crop)
+
+                # expand nls
+                for n in nl:
+                    crop = {"frame": frame_path, "nl": n, "box": box}
+                    self.list_of_crops.append(crop)
         # new_list_of_tracks = []
         # for track in self.list_of_tracks:
         #     new_frames = []
@@ -133,6 +142,25 @@ class CityFlowNLDataset(Dataset):
     def __len__(self):
         return len(self.list_of_crops)
 
+    def bbox_aug(self, img, bbox, h, w):
+        resized_h = int(h * 0.8)
+        resized_w = int(w * 0.8)
+        xmin, ymin, xmax, ymax = bbox[0], bbox[1], bbox[0] + bbox[2], bbox[1] + bbox[3]
+        first = [max(xmax - resized_w, 0), max(ymax - resized_h, 0)]
+        second = [min(xmin + resized_w, w) - resized_w, min(ymin + resized_h, h) - resized_h]
+        if first[0] > second[0] or first[1] > second[1]:
+            return img, bbox
+        x = random.randint(first[0], second[0])
+        y = random.randint(first[1], second[1])
+
+        # print(bbox)
+        tf = A.Compose(
+            [A.Crop(x_min=x, y_min=y, x_max=x+resized_w, y_max=y+resized_h, p=0.5)],
+            bbox_params=A.BboxParams(format='coco', label_fields=['class_labels']),
+        )(image=img, bboxes=[bbox], class_labels=[0])
+        # print(tf['bboxes'])
+        return tf['image'], tf['bboxes'][0]
+
     def __getitem__(self, index):
         """
         Get pairs of NL and cropped frame.
@@ -140,13 +168,16 @@ class CityFlowNLDataset(Dataset):
         dp = self.list_of_crops[index]
         frame = cv2.imread(dp["frame"])
         h, w, _ = frame.shape
-        frame = torch.from_numpy(frame).permute([2, 0, 1])
         box = dp["box"]
-        nl = dp["nl"][int(random.uniform(0, 3))]
+        # frame, box = self.bbox_aug(frame, box, h, w)
+        
+        frame = torch.from_numpy(frame).permute([2, 0, 1])
+        
+        nl = dp["nl"]#[int(random.uniform(0, 3))]
         nl = self.nl.sentence_to_index(nl)
         ymin, ymax = box[1], box[1] + box[3]
         xmin, xmax = box[0], box[0] + box[2]
-        frame = self.transforms[0](frame)
+        frame = self.transforms(frame)
         
         h_ratio = self.data_cfg.DATA.GLOBAL_SIZE[0] / h
         w_ratio = self.data_cfg.DATA.GLOBAL_SIZE[1] / w
@@ -188,7 +219,6 @@ class CityFlowNLDataset(Dataset):
         # crop = cv2.resize(crop, dsize=self.data_cfg.CROP_SIZE)
         # crop = torch.from_numpy(crop).permute([2, 0, 1]).to(
         #     dtype=torch.float32)
-
         return torch.tensor(nl), frame, label
 
 
@@ -237,7 +267,7 @@ class CityFlowNLInferenceDataset(Dataset):
             if self.load_frame:
                 frame = cv2.imread(frame_path)
                 h, w, _ = frame.shape
-                frame = self.transforms[0](frame)
+                frame = self.transforms(frame)
                 frames.append(frame)
             else:
                 if idx == 0:
