@@ -15,7 +15,8 @@ import shutil
 from tqdm import tqdm
 
 
-epoch = 42
+epoch = 50
+test_batch_size = 64
 scene_threshold = 0.8
 total_threshold = 0.8
 num_of_vehicles = None
@@ -48,15 +49,25 @@ if not os.path.exists(f'cache/{epoch}'):
             b = frames.shape[0]
             cache = []
 
+            # version 3
+            if b <= test_batch_size:
+                cache = model.cnn(frames)
+                torch.save(cache, f'cache/{epoch}/{idx}.pth')
+            else:
+                cache = []
+                for f in frames.split(test_batch_size):
+                    cache.append(model.cnn(f))
+                torch.save(torch.cat(cache, dim=0), f'cache/{epoch}/{idx}.pth')
+
             # version 2
             # b = num_of_vehicles if num_of_vehicles <= b else b
             # cache = model.cnn(frames[0: b])
             # torch.save(cache, f'cache/{epoch}/{idx}.pth')
 
             # version 1
-            for batch_idx in range(b):
-                cache.append(model.cnn(frames[batch_idx:batch_idx+1]))
-            torch.save(torch.cat(cache, dim=0), f'cache/{epoch}/{idx}.pth')
+            # for batch_idx in range(b):
+            #     cache.append(model.cnn(frames[batch_idx:batch_idx+1]))
+            # torch.save(torch.cat(cache, dim=0), f'cache/{epoch}/{idx}.pth')
 
         print('saving language features..')
         for uuid, query_nl in zip(uuids, nls):
@@ -88,6 +99,22 @@ for nlidx, (uuid, query_nl) in enumerate(zip(uuids, nls)):
             # print(frames.shape)
             # b = frames.shape[0]
             text = query_nl[0]
+
+            # version 3
+            cache = torch.load(f'cache/{epoch}/{idx}.pth')
+            
+            b = cache.shape[0]
+            if b <= test_batch_size:
+                results = model(cache_nl[0], cache).sigmoid().cpu().detach().numpy()
+            else:
+                results = []
+                for c in cache.split(test_batch_size):
+                    output = model(cache_nl[0], c).sigmoid()
+                    results.append(output.cpu())
+                results = torch.cat(results, dim=0).cpu().detach().numpy()
+            # for batch_idx in range(cache.shape[0]):
+            #     output = model(cache_nl[0], cache[batch_idx:batch_idx+1]).sigmoid()
+            #     results.append(output.squeeze(0).cpu().detach().numpy())
             
             # version 2
             # cache = torch.load(f'cache/{epoch}/{idx}.pth')
@@ -95,11 +122,11 @@ for nlidx, (uuid, query_nl) in enumerate(zip(uuids, nls)):
             # results = model(nl, cache).sigmoid().cpu().detach().numpy()
             
             # version 1
-            cache = torch.load(f'cache/{epoch}/{idx}.pth')
-            results = []
-            for batch_idx in range(cache.shape[0]):
-                output = model(cache_nl[0], cache[batch_idx:batch_idx+1]).sigmoid()
-                results.append(output.squeeze(0).cpu().detach().numpy())
+            # cache = torch.load(f'cache/{epoch}/{idx}.pth')
+            # results = []
+            # for batch_idx in range(cache.shape[0]):
+            #     output = model(cache_nl[0], cache[batch_idx:batch_idx+1]).sigmoid()
+            #     results.append(output.squeeze(0).cpu().detach().numpy())
 
             prob = compute_probability_of_activations(results, rois, scene_threshold)
             # print(idx, ': ', prob)
