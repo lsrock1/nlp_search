@@ -9,9 +9,12 @@ import torch
 from torch.optim.lr_scheduler import MultiStepLR
 import torch.nn.functional as F
 
+
+resume_epoch = 29
+
 cfg = get_default_config()
 dataset = CityFlowNLDataset(cfg, build_transforms(cfg))
-print(len(dataset.nl))
+
 model = MyModel(cfg, len(dataset.nl)).cuda()
 optimizer = torch.optim.Adam(
         params=model.parameters(),
@@ -20,9 +23,16 @@ lr_scheduler = MultiStepLR(optimizer,
                           milestones=(30, 50, 70),
                           gamma=cfg.TRAIN.LR.WEIGHT_DECAY)
 
+if resume_epoch > 0:
+    model.load_state_dict(torch.load(f'save/{resume_epoch}.pth'))
+    optimizer.load_state_dict(torch.load(f'save/{resume_epoch}_optim.pth'))
+    lr_scheduler.last_epoch = resume_epoch
+    lr_scheduler.step()
+    print(f'resume from {resume_epoch} pth file, starting {resume_epoch+1} epoch')
+
 loader = DataLoader(dataset, batch_size=cfg.TRAIN.BATCH_SIZE, shuffle=True, num_workers=cfg.TRAIN.NUM_WORKERS)
 
-for epoch in range(cfg.TRAIN.EPOCH):
+for epoch in range(resume_epoch+1, cfg.TRAIN.EPOCH):
     losses = 0.
     precs = 0.
     for idx, (nl, frame, label) in enumerate(loader):
@@ -54,7 +64,11 @@ for epoch in range(cfg.TRAIN.EPOCH):
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+        
         losses += loss.item()
         # precs += recall.item()
-        print(f'epoch: {epoch} ,step: {idx}/{len(loader)}, loss: {losses / (idx + 1)}, recall: {recall.item()}, accuracy: {accu}')
+        lr = optimizer.param_groups[0]['lr']
+        print(f'epoch: {epoch}, lr: {lr}, step: {idx}/{len(loader)}, loss: {losses / (idx + 1)}, recall: {recall.item()}, accuracy: {accu}')
+    lr_scheduler.step()
     torch.save(model.state_dict(), f'save/{epoch}.pth')
+    torch.save(optimizer.state_dict(), f'save/{epoch}_optim.pth')

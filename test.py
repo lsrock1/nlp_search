@@ -14,27 +14,25 @@ import os
 import shutil
 from tqdm import tqdm
 
-cfg = get_default_config()
-dataset = CityFlowNLInferenceDataset(cfg, build_transforms(cfg))
-# print(len(dataset.nl))
-model = MyModel(cfg, len(dataset.nl)).cuda()
-# optimizer = torch.optim.Adam(
-#         params=model.parameters(),
-#         lr=cfg.TRAIN.LR.BASE_LR)
-# lr_scheduler = MultiStepLR(optimizer,
-#                           milestones=(30, 60),
-#                           gamma=cfg.TRAIN.LR.WEIGHT_DECAY)
 
-loader = DataLoader(dataset, batch_size=1, shuffle=False, num_workers=cfg.TRAIN.NUM_WORKERS)
+epoch = 42
+scene_threshold = 0.8
+total_threshold = 0.8
+num_of_vehicles = None
+
+cfg = get_default_config()
+dataset = CityFlowNLInferenceDataset(cfg, build_transforms(cfg), num_of_vehicles)
+model = MyModel(cfg, len(dataset.nl)).cuda()
+loader = DataLoader(dataset, batch_size=1, shuffle=False, num_workers=4)
 uuids, nls = query(cfg)
-epoch = 25
-threshold = 0.8
+
 model.load_state_dict(torch.load(f'save/{epoch}.pth'))
 model.eval()
 
 shutil.rmtree('results')
 os.mkdir('results')
 
+cache_img_ft = {}
 # extract img fts first to save time
 if not os.path.exists('cache'):
     # shutil.rmtree('cache')
@@ -49,24 +47,35 @@ if not os.path.exists(f'cache/{epoch}'):
             frames = frames.squeeze(0).cuda()
             b = frames.shape[0]
             cache = []
+
+            # version 2
+            # b = num_of_vehicles if num_of_vehicles <= b else b
+            # cache = model.cnn(frames[0: b])
+            # torch.save(cache, f'cache/{epoch}/{idx}.pth')
+
+            # version 1
             for batch_idx in range(b):
                 cache.append(model.cnn(frames[batch_idx:batch_idx+1]))
             torch.save(torch.cat(cache, dim=0), f'cache/{epoch}/{idx}.pth')
 
         print('saving language features..')
         for uuid, query_nl in zip(uuids, nls):
-            nls = []
+            nls_list = []
             for nl in query_nl:
                 nl = torch.tensor(dataset.nl.sentence_to_index(nl, is_train=False)).cuda()
                 # nls.append(nl.unsqueeze(0).transpose(1, 0))
                 nl = nl.unsqueeze(0).transpose(1, 0)
                 # bs, len, dim
                 nl = model.rnn(nl)
-                nls.append(nl)
-            torch.save(nls, f'cache/{epoch}/{uuid}.pth')
+                nls_list.append(nl)
+            torch.save(nls_list, f'cache/{epoch}/{uuid}.pth')
 
-for uuid, query_nl in zip(uuids, nls):
+dataset.load_frame = False
+
+for nlidx, (uuid, query_nl) in enumerate(zip(uuids, nls)):
+    print(f'{nlidx} / {len(nls)}')
     cache_nl = torch.load(f'cache/{epoch}/{uuid}.pth')
+
     # nls = []
     # for nl in query_nl:
     #     nl = torch.tensor(dataset.nl.sentence_to_index(nl, is_train=False)).cuda()
@@ -75,29 +84,29 @@ for uuid, query_nl in zip(uuids, nls):
         with torch.no_grad():
             boxes = boxes.squeeze(0).numpy()
             rois = rois.squeeze(0).numpy()
-            frames = frames.squeeze(0)
+            # frames = frames.squeeze(0)
             # print(frames.shape)
-            b = frames.shape[0]
+            # b = frames.shape[0]
             text = query_nl[0]
             
-            # frames = frames.cuda()
-            results = []
+            # version 2
+            # cache = torch.load(f'cache/{epoch}/{idx}.pth')
+            # nl = cache_nl[0].expand(cache.shape[0], -1, -1)
+            # results = model(nl, cache).sigmoid().cpu().detach().numpy()
+            
+            # version 1
             cache = torch.load(f'cache/{epoch}/{idx}.pth')
-            for batch_idx in range(b):
-                # results_bs = []
-                # for nl in cache_nl:
+            results = []
+            for batch_idx in range(cache.shape[0]):
                 output = model(cache_nl[0], cache[batch_idx:batch_idx+1]).sigmoid()
                 results.append(output.squeeze(0).cpu().detach().numpy())
-                    # results_bs.append(output)
-                # results_bs = torch.cat(results_bs, dim=0)
-                # results.append(results_bs.mean(dim=0).cpu().detach().numpy())
 
-            prob = compute_probability_of_activations(results, rois, threshold)
+            prob = compute_probability_of_activations(results, rois, scene_threshold)
             # print(idx, ': ', prob)
             if not os.path.exists('results/' + query_nl[0]):
                 os.mkdir('results/' + query_nl[0])
-            if prob > threshold:
-                save_img(np.squeeze(results[0], axis=0) * 255, cv2.imread(paths[0][0]), boxes[0], f"results/{query_nl[0]}/{idx}_{0}.png")
+            if prob > total_threshold:
+                save_img(np.squeeze(results[0], axis=0) * 255, cv2.imread(paths[0][0]), boxes[0], f"results/{query_nl[0]}/{idx}_{prob}.png")
             # for i, o in enumerate(results):
             #     # print(paths)
             #     roi = [b.item() for b in rois[i]]

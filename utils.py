@@ -12,14 +12,15 @@ def compute_probability_of_activation(result, roi, threshold):
     # roi = [b.item() for b in roi]
     result = (result > threshold) * result
     activation_ratio = result[:, roi[1]:roi[3], roi[0]:roi[2]].sum() / ((roi[3] - roi[1]) * (roi[2] - roi[0]))
-    return activation_ratio > threshold
+    return activation_ratio
 
 
 def compute_probability_of_activations(results, rois, threshold):
     total_length = len(results)
     bool_results = 0
     for result, roi in zip(results, rois):        
-        bool_results += compute_probability_of_activation(result, roi, threshold)
+        activation_ratio = compute_probability_of_activation(result, roi, threshold)
+        bool_results += activation_ratio# > threshold
     return bool_results / total_length
 
 

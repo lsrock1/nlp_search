@@ -193,7 +193,7 @@ class CityFlowNLDataset(Dataset):
 
 
 class CityFlowNLInferenceDataset(Dataset):
-    def __init__(self, data_cfg, transforms):
+    def __init__(self, data_cfg, transforms, num_frames=None):
         """Dataset for evaluation. Loading tracks instead of frames."""
         self.data_cfg = data_cfg
         with open(self.data_cfg.DATA.EVAL_TRACKS_JSON_PATH) as f:
@@ -202,6 +202,8 @@ class CityFlowNLInferenceDataset(Dataset):
         self.list_of_tracks = list(tracks.values())
         self.transforms = transforms
         self.nl = NL(data_cfg, self.list_of_tracks)
+        self.load_frame = True
+        self.num_frames = num_frames
 
     def __len__(self):
         return len(self.list_of_uuids)
@@ -224,15 +226,24 @@ class CityFlowNLInferenceDataset(Dataset):
         boxes = []
         paths = []
         rois = []
-        for frame_path, box in zip(dp["frames"], dp["boxes"]):
+        for idx, (frame_path, box) in enumerate(zip(dp["frames"], dp["boxes"])):
+            if self.num_frames != None and len(frames) == self.num_frames:
+                break
             frame_path = os.path.join(self.data_cfg.DATA.CITYFLOW_PATH, frame_path)
             if not os.path.isfile(frame_path):
                 continue
             paths.append(frame_path)
-            frame = cv2.imread(frame_path)
-            h, w, _ = frame.shape
-            frame = self.transforms[0](frame)
-            frames.append(frame)
+
+            if self.load_frame:
+                frame = cv2.imread(frame_path)
+                h, w, _ = frame.shape
+                frame = self.transforms[0](frame)
+                frames.append(frame)
+            else:
+                if idx == 0:
+                    frame = cv2.imread(frame_path)
+                    h, w, _ = frame.shape
+                frames.append(torch.zeros(1))
             # boxes.append(box)
 
             ymin, ymax = box[1], box[1] + box[3]
