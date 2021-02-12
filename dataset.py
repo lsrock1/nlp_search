@@ -14,7 +14,7 @@ import cv2
 import torch
 from torch.utils.data import Dataset
 from nltk.stem import PorterStemmer
-# import albumentations as A
+import albumentations as A
 from nltk.corpus import stopwords
 # import nltk
 # nltk.download('stopwords')
@@ -34,7 +34,7 @@ class NL:
             with open(os.path.join(self.cfg.DATA.DICT_PATH, 'special_case.pkl'), 'rb') as handle:
                 self.special_case = pickle.load(handle)
         else:
-            self.words_count, self.word_to_idx, self.special_case = self.__build_dict(self.tracks)
+            self.words_count, self.word_to_idx = self.__build_dict(self.tracks)
 
     def __len__(self):
         return len(self.word_to_idx)
@@ -49,14 +49,18 @@ class NL:
         max_length = 0
 
         # special case handling
-        special_case = []
+        except_case = ['dark-red', 'dark-blue', 'dark-colored']
+        self.special_case = {}
         for t in tracks:
             for n in t['nl']:
                 for word in n.lower()[:-1].split():
-                    if '-' in word:
-                        special_case.append(word.replace('-', ' '))
+                    if '-' in word and word not in except_case and word not in self.special_case:
+                        self.special_case[word.replace('-', ' ')] = word.replace('-', '')
         
-        self.special_case = special_case
+        for ec in except_case:
+            self.special_case[ec] = ec.replace('-', ' ')
+        
+        # self.special_case = special_case
                         
         for t in tracks:
             for n in t['nl']:
@@ -83,15 +87,17 @@ class NL:
             pickle.dump(word_to_idx, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
         with open(os.path.join(self.cfg.DATA.DICT_PATH, 'special_case.pkl'), 'wb') as handle:
-            pickle.dump(special_case, handle, protocol=pickle.HIGHEST_PROTOCOL)
+            pickle.dump(self.special_case, handle, protocol=pickle.HIGHEST_PROTOCOL)
             
-        return word_count, word_to_idx, special_case
+        return word_count, word_to_idx
 
     def do_clean(self, nl):
-        for sc in self.special_case:
+        nl = nl.lower()
+        for sc, replaced in self.special_case.items():
             if sc in nl:
-                nl = nl.replace(sc, sc.replace(' ', ''))
-        nl = nl[:-1].lower().replace('-', '').split()
+                nl = nl.replace(sc, replaced)
+
+        nl = nl[:-1].replace('-', '').split()
         nl = [self.s.stem(w) for w in nl]
         nl = [w for w in nl if w not in self.stop_words]
         return nl
@@ -124,6 +130,7 @@ class CityFlowNLDataset(Dataset):
         self.list_of_uuids = list(tracks.keys())
         self.list_of_tracks = list(tracks.values())
         self.list_of_crops = list()
+        self.nl = NL(data_cfg, self.list_of_tracks)
         for track in self.list_of_tracks:
             for frame_idx, frame in enumerate(track["frames"]):
                 if not os.path.exists(os.path.join(self.data_cfg.DATA.CITYFLOW_PATH, frame)):
@@ -137,48 +144,32 @@ class CityFlowNLDataset(Dataset):
 
                 # expand nls
                 for n in nl:
-                    crop = {"frame": frame_path, "nl": n, "box": box}
+                    crop = {"frame": frame_path, "nl": self.nl.sentence_to_index(n), "box": box}
                     self.list_of_crops.append(crop)
-        # new_list_of_tracks = []
-        # for track in self.list_of_tracks:
-        #     new_frames = []
-        #     new_boxes = []
-        #     for f, b in zip(track['frames'], track['boxes']):
-        #         if os.path.exists(os.path.join(data_cfg.DATA.CITYFLOW_PATH, f)):
-        #             new_frames.append(f)
-        #             new_boxes.append(b)
-        #     if len(new_frames) > 0:
-        #         # print(len(new_frames))
-        #         new_list_of_tracks.append({
-        #             'frames': new_frames,
-        #             'boxes': new_boxes,
-        #             'nl': track['nl']
-        #         })
-        # self.list_of_tracks = new_list_of_tracks
-        self.nl = NL(data_cfg, self.list_of_tracks)
+        
         self.transforms = transforms
 
     def __len__(self):
         return len(self.list_of_crops)
 
-    # def bbox_aug(self, img, bbox, h, w):
-    #     resized_h = int(h * 0.8)
-    #     resized_w = int(w * 0.8)
-    #     xmin, ymin, xmax, ymax = bbox[0], bbox[1], bbox[0] + bbox[2], bbox[1] + bbox[3]
-    #     first = [max(xmax - resized_w, 0), max(ymax - resized_h, 0)]
-    #     second = [min(xmin + resized_w, w) - resized_w, min(ymin + resized_h, h) - resized_h]
-    #     if first[0] > second[0] or first[1] > second[1]:
-    #         return img, bbox
-    #     x = random.randint(first[0], second[0])
-    #     y = random.randint(first[1], second[1])
+    def bbox_aug(self, img, bbox, h, w):
+        resized_h = int(h * 0.8)
+        resized_w = int(w * 0.8)
+        xmin, ymin, xmax, ymax = bbox[0], bbox[1], bbox[0] + bbox[2], bbox[1] + bbox[3]
+        first = [max(xmax - resized_w, 0), max(ymax - resized_h, 0)]
+        second = [min(xmin + resized_w, w) - resized_w, min(ymin + resized_h, h) - resized_h]
+        if first[0] > second[0] or first[1] > second[1]:
+            return img, bbox
+        x = random.randint(first[0], second[0])
+        y = random.randint(first[1], second[1])
 
-    #     # print(bbox)
-    #     tf = A.Compose(
-    #         [A.Crop(x_min=x, y_min=y, x_max=x+resized_w, y_max=y+resized_h, p=0.5)],
-    #         bbox_params=A.BboxParams(format='coco', label_fields=['class_labels']),
-    #     )(image=img, bboxes=[bbox], class_labels=[0])
-    #     # print(tf['bboxes'])
-    #     return tf['image'], tf['bboxes'][0]
+        # print(bbox)
+        tf = A.Compose(
+            [A.Crop(x_min=x, y_min=y, x_max=x+resized_w, y_max=y+resized_h, p=0.5)],
+            bbox_params=A.BboxParams(format='coco', label_fields=['class_labels']),
+        )(image=img, bboxes=[bbox], class_labels=[0])
+        # print(tf['bboxes'])
+        return tf['image'], tf['bboxes'][0]
 
     def __getitem__(self, index):
         """
@@ -188,13 +179,12 @@ class CityFlowNLDataset(Dataset):
         frame = cv2.imread(dp["frame"])
         h, w, _ = frame.shape
         box = dp["box"]
-        # frame, box = self.bbox_aug(frame, box, h, w)
+        frame, box = self.bbox_aug(frame, box, h, w)
         
         frame = torch.from_numpy(frame).permute([2, 0, 1])
         
         nl = dp["nl"]#[int(random.uniform(0, 3))]
     
-        nl = self.nl.sentence_to_index(nl)
         ymin, ymax = box[1], box[1] + box[3]
         xmin, xmax = box[0], box[0] + box[2]
         frame = self.transforms(frame)
@@ -203,42 +193,10 @@ class CityFlowNLDataset(Dataset):
         w_ratio = self.data_cfg.DATA.GLOBAL_SIZE[1] / w
         ymin, ymax = int(ymin * h_ratio / 16), int(ymax * h_ratio / 16)
         xmin, xmax = int(xmin * w_ratio / 16), int(xmax * w_ratio / 16)
-        # print(xmin, ' ', xmax, ' ', ymin, ' ', ymax)
-        # crop = frame[box[1]:box[1] + box[3], box[0]: box[0] + box[2], :]
-        # crop = cv2.resize(crop, dsize=self.data_cfg.CROP_SIZE)
-        # frame = frame.permute([2, 0, 1])
+
         label = torch.zeros([1, self.data_cfg.DATA.GLOBAL_SIZE[0]//16, self.data_cfg.DATA.GLOBAL_SIZE[1]//16])
         label[:, ymin:ymax, xmin:xmax] = 1
-        # print(label.shape)
-        # print(frame.shape)
-        # print(len(nl))
-        # track = self.list_of_tracks[index]
-        # frames = track["frames"]
-        # frames_idx = np.random.choice(len(frames), self.data_cfg.DATA.NUM_IMG)
-        # # print(frames_idx)
-        # selected_frames = [frames[i] for i in frames_idx]
-        # # print(selected_frames)
-        # selected_boxes = np.array(track["boxes"])[frames_idx]
-        # nl = track["nl"][random.randrange(3)]
-        # nl = self.nl.sentence_to_index(nl)
-        # # print([os.path.join(self.data_cfg.DATA.CITYFLOW_PATH, s) for s in selected_frames])
-        # selected_frames = [cv2.imread(os.path.join(self.data_cfg.DATA.CITYFLOW_PATH, s)) for s in selected_frames]
-        # # print(selected_frames)
-        # selected_boxes = [s[b[1]:b[1]+b[3], b[0]:b[0]+b[2], :] for b, s in zip(selected_boxes, selected_frames) ]
-        
-        # selected_frames = [torch.from_numpy(s).permute([2, 0, 1]) for s in selected_frames]
-        # selected_boxes = [torch.from_numpy(s).permute([2, 0, 1]) for s in selected_boxes]
-        
-        # selected_frames = torch.stack([self.transforms[0](s) for s in selected_frames], dim=0)
-        # selected_boxes = torch.stack([self.transforms[1](s) for s in selected_boxes], dim=0)
 
-        # frame_path = os.path.join(self.data_cfg.CITYFLOW_PATH, frame)
-        # frame = cv2.imread(dp["frame"])
-        # box = dp["box"]
-        # crop = frame[box[1]:box[1] + box[3], box[0]: box[0] + box[2], :]
-        # crop = cv2.resize(crop, dsize=self.data_cfg.CROP_SIZE)
-        # crop = torch.from_numpy(crop).permute([2, 0, 1]).to(
-        #     dtype=torch.float32)
         return torch.tensor(nl), frame, label
 
 

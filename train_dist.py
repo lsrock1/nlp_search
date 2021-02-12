@@ -4,6 +4,7 @@ from model import MyModel
 from transforms import build_transforms
 from loss import TripletLoss, sigmoid_focal_loss, sampling_loss
 
+import torch.backends.cudnn as cudnn
 from torch.utils.data import DataLoader, DistributedSampler
 import torch
 from torch.optim.lr_scheduler import MultiStepLR
@@ -23,6 +24,7 @@ def train_model_on_dataset(rank, cfg):
                             world_size=cfg.num_gpu,
                             init_method="env://")
     torch.cuda.set_device(rank)
+    cudnn.benchmark = True
     dataset = CityFlowNLDataset(cfg, build_transforms(cfg))
 
     model = MyModel(cfg, len(dataset.nl)).cuda()
@@ -33,7 +35,7 @@ def train_model_on_dataset(rank, cfg):
             params=model.parameters(),
             lr=cfg.TRAIN.LR.BASE_LR, weight_decay=0.00003)
     lr_scheduler = MultiStepLR(optimizer,
-                            milestones=(20, 40),
+                            milestones=cfg.TRAIN.STEPS,
                             gamma=cfg.TRAIN.LR.WEIGHT_DECAY)
 
     if cfg.resume_epoch > 0:
@@ -46,11 +48,10 @@ def train_model_on_dataset(rank, cfg):
         cfg.resume_epoch += 1
 
     # loader = DataLoader(dataset, batch_size=cfg.TRAIN.BATCH_SIZE, shuffle=True, num_workers=cfg.TRAIN.NUM_WORKERS)
-    train_sampler = DistributedSampler(dataset, num_replicas=cfg.num_gpu,
-    	rank=rank)
+    train_sampler = DistributedSampler(dataset)
     loader = DataLoader(dataset, batch_size=cfg.TRAIN.BATCH_SIZE //cfg.num_gpu,
                             num_workers=cfg.TRAIN.NUM_WORKERS,# shuffle=True,
-                            sampler=train_sampler)
+                            sampler=train_sampler, pin_memory=True)
     for epoch in range(cfg.resume_epoch, cfg.TRAIN.EPOCH):
         losses = 0.
         precs = 0.
@@ -59,11 +60,11 @@ def train_model_on_dataset(rank, cfg):
             # print(nl.shape)
             # print(global_img.shape)
             # print(local_img.shape)
-            nl = nl.cuda()
-            label = label.cuda()
+            nl = nl.cuda(non_blocking=True)
+            label = label.cuda(non_blocking=True)
             # global_img, local_img = global_img.cuda(), local_img.cuda()
             nl = nl.transpose(1, 0)
-            frame = frame.cuda()
+            frame = frame.cuda(non_blocking=True)
             # local_img = local_img.reshape(-1, 3, cfg.DATA.LOCAL_CROP_SIZE[0], cfg.DATA.LOCAL_CROP_SIZE[1])
             # global_img = global_img.reshape(-1, 3, cfg.DATA.GLOBAL_SIZE[0], cfg.DATA.GLOBAL_SIZE[1])
             output = model(nl, frame)
@@ -75,7 +76,7 @@ def train_model_on_dataset(rank, cfg):
             # print(pred.sum(), ' ', label.sum())
             # loss = sampling_loss(output, label)
             # loss = F.binary_cross_entropy_with_logits(output, label)
-            loss = sigmoid_focal_loss(output, label, reduction='mean')
+            loss = sigmoid_focal_loss(output, label, reduction='sum') / cfg.num_gpu
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
