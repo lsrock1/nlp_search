@@ -14,7 +14,7 @@ import cv2
 import torch
 from torch.utils.data import Dataset
 from nltk.stem import PorterStemmer
-import albumentations as A
+# import albumentations as A
 from nltk.corpus import stopwords
 # import nltk
 # nltk.download('stopwords')
@@ -55,6 +55,8 @@ class NL:
                 for word in n.lower()[:-1].split():
                     if '-' in word:
                         special_case.append(word.replace('-', ' '))
+        
+        self.special_case = special_case
                         
         for t in tracks:
             for n in t['nl']:
@@ -86,6 +88,9 @@ class NL:
         return word_count, word_to_idx, special_case
 
     def do_clean(self, nl):
+        for sc in self.special_case:
+            if sc in nl:
+                nl = nl.replace(sc, sc.replace(' ', ''))
         nl = nl[:-1].lower().replace('-', '').split()
         nl = [self.s.stem(w) for w in nl]
         nl = [w for w in nl if w not in self.stop_words]
@@ -122,7 +127,7 @@ class CityFlowNLDataset(Dataset):
         for track in self.list_of_tracks:
             for frame_idx, frame in enumerate(track["frames"]):
                 if not os.path.exists(os.path.join(self.data_cfg.DATA.CITYFLOW_PATH, frame)):
-                    print(os.path.join(self.data_cfg.DATA.CITYFLOW_PATH, frame))
+                    # print(os.path.join(self.data_cfg.DATA.CITYFLOW_PATH, frame))
                     # print('not exists', os.path.join(self.data_cfg.DATA.CITYFLOW_PATH, frame))
                     continue
                 frame_path = os.path.join(self.data_cfg.DATA.CITYFLOW_PATH, frame)
@@ -156,24 +161,24 @@ class CityFlowNLDataset(Dataset):
     def __len__(self):
         return len(self.list_of_crops)
 
-    def bbox_aug(self, img, bbox, h, w):
-        resized_h = int(h * 0.8)
-        resized_w = int(w * 0.8)
-        xmin, ymin, xmax, ymax = bbox[0], bbox[1], bbox[0] + bbox[2], bbox[1] + bbox[3]
-        first = [max(xmax - resized_w, 0), max(ymax - resized_h, 0)]
-        second = [min(xmin + resized_w, w) - resized_w, min(ymin + resized_h, h) - resized_h]
-        if first[0] > second[0] or first[1] > second[1]:
-            return img, bbox
-        x = random.randint(first[0], second[0])
-        y = random.randint(first[1], second[1])
+    # def bbox_aug(self, img, bbox, h, w):
+    #     resized_h = int(h * 0.8)
+    #     resized_w = int(w * 0.8)
+    #     xmin, ymin, xmax, ymax = bbox[0], bbox[1], bbox[0] + bbox[2], bbox[1] + bbox[3]
+    #     first = [max(xmax - resized_w, 0), max(ymax - resized_h, 0)]
+    #     second = [min(xmin + resized_w, w) - resized_w, min(ymin + resized_h, h) - resized_h]
+    #     if first[0] > second[0] or first[1] > second[1]:
+    #         return img, bbox
+    #     x = random.randint(first[0], second[0])
+    #     y = random.randint(first[1], second[1])
 
-        # print(bbox)
-        tf = A.Compose(
-            [A.Crop(x_min=x, y_min=y, x_max=x+resized_w, y_max=y+resized_h, p=0.5)],
-            bbox_params=A.BboxParams(format='coco', label_fields=['class_labels']),
-        )(image=img, bboxes=[bbox], class_labels=[0])
-        # print(tf['bboxes'])
-        return tf['image'], tf['bboxes'][0]
+    #     # print(bbox)
+    #     tf = A.Compose(
+    #         [A.Crop(x_min=x, y_min=y, x_max=x+resized_w, y_max=y+resized_h, p=0.5)],
+    #         bbox_params=A.BboxParams(format='coco', label_fields=['class_labels']),
+    #     )(image=img, bboxes=[bbox], class_labels=[0])
+    #     # print(tf['bboxes'])
+    #     return tf['image'], tf['bboxes'][0]
 
     def __getitem__(self, index):
         """
@@ -188,6 +193,7 @@ class CityFlowNLDataset(Dataset):
         frame = torch.from_numpy(frame).permute([2, 0, 1])
         
         nl = dp["nl"]#[int(random.uniform(0, 3))]
+    
         nl = self.nl.sentence_to_index(nl)
         ymin, ymax = box[1], box[1] + box[3]
         xmin, xmax = box[0], box[0] + box[2]
