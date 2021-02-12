@@ -100,7 +100,7 @@ def train_model_on_dataset(rank, cfg):
 
 
 if __name__ == '__main__':
-    cfg.num_gpu = 4
+    cfg.num_gpu = torch.cuda.device_count()
     cfg.resume_epoch = 0
     mp.spawn(train_model_on_dataset, args=(cfg,),
                  nprocs=cfg.num_gpu, join=True)

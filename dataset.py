@@ -31,8 +31,10 @@ class NL:
                 self.words_count = pickle.load(handle)
             with open(os.path.join(self.cfg.DATA.DICT_PATH, 'word_to_idx.pkl'), 'rb') as handle:
                 self.word_to_idx = pickle.load(handle)
+            with open(os.path.join(self.cfg.DATA.DICT_PATH, 'special_case.pkl'), 'rb') as handle:
+                self.special_case = pickle.load(handle)
         else:
-            self.words_count, self.word_to_idx = self.__build_dict(self.tracks)
+            self.words_count, self.word_to_idx, self.special_case = self.__build_dict(self.tracks)
 
     def __len__(self):
         return len(self.word_to_idx)
@@ -45,6 +47,15 @@ class NL:
         word_count['<PAD>'] += 1
         word_count['<UNK>'] += 1
         max_length = 0
+
+        # special case handling
+        special_case = []
+        for t in tracks:
+            for n in t['nl']:
+                for word in n.lower()[:-1].split():
+                    if '-' in word:
+                        special_case.append(word.replace('-', ' '))
+                        
         for t in tracks:
             for n in t['nl']:
                 cleaned_sentence = self.do_clean(n)
@@ -69,12 +80,15 @@ class NL:
         with open(os.path.join(self.cfg.DATA.DICT_PATH, 'word_to_idx.pkl'), 'wb') as handle:
             pickle.dump(word_to_idx, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
-        return word_count, word_to_idx
+        with open(os.path.join(self.cfg.DATA.DICT_PATH, 'special_case.pkl'), 'wb') as handle:
+            pickle.dump(special_case, handle, protocol=pickle.HIGHEST_PROTOCOL)
+            
+        return word_count, word_to_idx, special_case
 
     def do_clean(self, nl):
-        nl = nl[:-1].lower().split()
+        nl = nl[:-1].lower().replace('-', '').split()
         nl = [self.s.stem(w) for w in nl]
-        # nl = [w for w in nl if w not in self.stop_words]
+        nl = [w for w in nl if w not in self.stop_words]
         return nl
 
     def sentence_to_index(self, nl, is_train=True):
