@@ -2,7 +2,7 @@ from dataset import CityFlowNLDataset
 from configs import get_default_config
 from model import MyModel
 from transforms import build_transforms
-from loss import TripletLoss, sigmoid_focal_loss, sampling_loss
+from loss import TripletLoss, sigmoid_focal_loss, sampling_loss, reduce_sum
 
 import torch.backends.cudnn as cudnn
 from torch.utils.data import DataLoader, DistributedSampler
@@ -76,7 +76,10 @@ def train_model_on_dataset(rank, cfg):
             # print(pred.sum(), ' ', label.sum())
             # loss = sampling_loss(output, label)
             # loss = F.binary_cross_entropy_with_logits(output, label)
-            loss = sigmoid_focal_loss(output, label, reduction='sum') / cfg.num_gpu
+            total_num_pos = reduce_sum(label.new_tensor([label.sum()])).item()
+            num_pos_avg_per_gpu = max(total_num_pos / float(cfg.num_gpu), 1.0)
+
+            loss = sigmoid_focal_loss(output, label, reduction='sum') / num_pos_avg_per_gpu
             optimizer.zero_grad()
             loss.backward()
             # torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)

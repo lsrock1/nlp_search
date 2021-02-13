@@ -1,6 +1,7 @@
 from torch import nn
 import torch
 import torch.nn.functional as F
+import torch.distributed as dist
 
 
 def euclidean_dist(x, y):
@@ -44,6 +45,12 @@ class TripletLoss(nn.Module):
         loss = self.margin_loss(dist_an, dist_ap, y)
         prec = (dist_an.data > dist_ap.data).sum() * 1. / y.size(0)
         return loss, prec
+
+
+def reduce_sum(tensor):
+    tensor = tensor.clone()
+    dist.all_reduce(tensor, op=dist.ReduceOp.SUM)
+    return tensor
 
 
 def sigmoid_focal_loss(
