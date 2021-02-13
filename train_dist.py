@@ -27,7 +27,7 @@ def train_model_on_dataset(rank, cfg):
     cudnn.benchmark = True
     dataset = CityFlowNLDataset(cfg, build_transforms(cfg))
 
-    model = MyModel(cfg, len(dataset.nl)).cuda()
+    model = MyModel(cfg, len(dataset.nl), dataset.nl.word_to_idx['<PAD>']).cuda()
     model = DistributedDataParallel(model, device_ids=[rank],
                                     output_device=rank,
                                     broadcast_buffers=cfg.num_gpu > 1)
@@ -79,18 +79,20 @@ def train_model_on_dataset(rank, cfg):
             loss = sigmoid_focal_loss(output, label, reduction='sum') / cfg.num_gpu
             optimizer.zero_grad()
             loss.backward()
+            # torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
             optimizer.step()
             
             losses += loss.item()
             # precs += recall.item()
-            pred = (output.sigmoid() > 0.5)
-            # print((pred == label).sum())
-            pred = (pred == label) 
-            recall = (pred * label).sum() / label.sum()
-
-            accu = pred.sum().item() / pred.numel()
-            lr = optimizer.param_groups[0]['lr']
+            
             if rank == 0:
+                pred = (output.sigmoid() > 0.5)
+                # print((pred == label).sum())
+                pred = (pred == label) 
+                recall = (pred * label).sum() / label.sum()
+
+                accu = pred.sum().item() / pred.numel()
+                lr = optimizer.param_groups[0]['lr']
                 print(f'epoch: {epoch}, lr: {lr}, step: {idx}/{len(loader)}, loss: {losses / (idx + 1)}, recall: {recall.item()}, accuracy: {accu}')
         lr_scheduler.step()
         if rank == 0:

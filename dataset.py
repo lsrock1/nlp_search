@@ -15,6 +15,7 @@ import torch
 from torch.utils.data import Dataset
 from nltk.stem import PorterStemmer
 import albumentations as A
+import albumentations.pytorch as AP
 from nltk.corpus import stopwords
 # import nltk
 # nltk.download('stopwords')
@@ -159,13 +160,34 @@ class CityFlowNLDataset(Dataset):
         first = [max(xmax - resized_w, 0), max(ymax - resized_h, 0)]
         second = [min(xmin + resized_w, w) - resized_w, min(ymin + resized_h, h) - resized_h]
         if first[0] > second[0] or first[1] > second[1]:
-            return img, bbox
+            tf = A.Compose(
+                [
+                    A.HorizontalFlip(p=0.5),
+                    A.Resize(self.data_cfg.DATA.GLOBAL_SIZE[0], self.data_cfg.DATA.GLOBAL_SIZE[1]),
+                    AP.transforms.ToTensor(normalize={
+                        'mean': [0.485, 0.456, 0.406],
+                        'std': [0.229, 0.224, 0.225]
+                    })
+                ],
+                bbox_params=A.BboxParams(format='coco', label_fields=['class_labels']),
+            )(image=img, bboxes=[bbox], class_labels=[0])
+            # print(tf['bboxes'])
+            return tf['image'], tf['bboxes'][0]
+            # return img, bbox
         x = random.randint(first[0], second[0])
         y = random.randint(first[1], second[1])
 
         # print(bbox)
         tf = A.Compose(
-            [A.Crop(x_min=x, y_min=y, x_max=x+resized_w, y_max=y+resized_h, p=0.5)],
+            [
+                A.Crop(x_min=x, y_min=y, x_max=x+resized_w, y_max=y+resized_h, p=0.5),
+                A.HorizontalFlip(p=0.5),
+                A.Resize(self.data_cfg.DATA.GLOBAL_SIZE[0], self.data_cfg.DATA.GLOBAL_SIZE[1]),
+                AP.transforms.ToTensor(normalize={
+                    'mean': [0.485, 0.456, 0.406],
+                    'std': [0.229, 0.224, 0.225]
+                })
+            ],
             bbox_params=A.BboxParams(format='coco', label_fields=['class_labels']),
         )(image=img, bboxes=[bbox], class_labels=[0])
         # print(tf['bboxes'])
@@ -180,19 +202,19 @@ class CityFlowNLDataset(Dataset):
         h, w, _ = frame.shape
         box = dp["box"]
         frame, box = self.bbox_aug(frame, box, h, w)
-        
-        frame = torch.from_numpy(frame).permute([2, 0, 1])
+        # print(frame.shape)
+        # frame = torch.from_numpy(frame).permute([2, 0, 1])
         
         nl = dp["nl"]#[int(random.uniform(0, 3))]
     
         ymin, ymax = box[1], box[1] + box[3]
         xmin, xmax = box[0], box[0] + box[2]
-        frame = self.transforms(frame)
-        
-        h_ratio = self.data_cfg.DATA.GLOBAL_SIZE[0] / h
-        w_ratio = self.data_cfg.DATA.GLOBAL_SIZE[1] / w
-        ymin, ymax = int(ymin * h_ratio / 16), int(ymax * h_ratio / 16)
-        xmin, xmax = int(xmin * w_ratio / 16), int(xmax * w_ratio / 16)
+        # frame = self.transforms(frame)
+        xmin, xmax, ymin, ymax = int(xmin//16), int(xmax//16), int(ymin//16), int(ymax//16)
+        # h_ratio = self.data_cfg.DATA.GLOBAL_SIZE[0] / h
+        # w_ratio = self.data_cfg.DATA.GLOBAL_SIZE[1] / w
+        # ymin, ymax = int(ymin * h_ratio / 16), int(ymax * h_ratio / 16)
+        # xmin, xmax = int(xmin * w_ratio / 16), int(xmax * w_ratio / 16)
 
         label = torch.zeros([1, self.data_cfg.DATA.GLOBAL_SIZE[0]//16, self.data_cfg.DATA.GLOBAL_SIZE[1]//16])
         label[:, ymin:ymax, xmin:xmax] = 1
@@ -215,6 +237,20 @@ class CityFlowNLInferenceDataset(Dataset):
 
     def __len__(self):
         return len(self.list_of_uuids)
+
+    def bbox_aug(self, img, bbox):
+        tf = A.Compose(
+            [
+                A.Resize(self.data_cfg.DATA.GLOBAL_SIZE[0], self.data_cfg.DATA.GLOBAL_SIZE[1]),
+                AP.transforms.ToTensor(normalize={
+                    'mean': [0.485, 0.456, 0.406],
+                    'std': [0.229, 0.224, 0.225]
+                })
+            ],
+            bbox_params=A.BboxParams(format='coco', label_fields=['class_labels']),
+        )(image=img, bboxes=[bbox], class_labels=[0])
+        # print(tf['bboxes'])
+        return tf['image'], tf['bboxes'][0]
 
     def __getitem__(self, index):
         """
@@ -245,12 +281,12 @@ class CityFlowNLInferenceDataset(Dataset):
             if self.load_frame:
                 frame = cv2.imread(frame_path)
                 h, w, _ = frame.shape
-                frame = self.transforms(frame)
+                frame, box_resized = self.bbox_aug(frame, box)
                 frames.append(frame)
             else:
-                if idx == 0:
-                    frame = cv2.imread(frame_path)
-                    h, w, _ = frame.shape
+                # if idx == 0:
+                    # frame = cv2.imread(frame_path)
+                    # h, w, _ = frame.shape
                 frames.append(torch.zeros(1))
             # boxes.append(box)
 
@@ -258,10 +294,10 @@ class CityFlowNLInferenceDataset(Dataset):
             xmin, xmax = box[0], box[0] + box[2]
             # frame = self.transforms[0](frame)
             boxes.append([xmin, ymin, xmax, ymax])
-            h_ratio = self.data_cfg.DATA.GLOBAL_SIZE[0] / h
-            w_ratio = self.data_cfg.DATA.GLOBAL_SIZE[1] / w
-            ymin, ymax = int(ymin * h_ratio / 16), int(ymax * h_ratio / 16)
-            xmin, xmax = int(xmin * w_ratio / 16), int(xmax * w_ratio / 16)
+            # h_ratio = self.data_cfg.DATA.GLOBAL_SIZE[0] / h
+            # w_ratio = self.data_cfg.DATA.GLOBAL_SIZE[1] / w
+            ymin, ymax = int(box_resized[1] // 16), int((box_resized[1] + box_resized[3]) // 16)
+            xmin, xmax = int(box_resized[0] // 16), int((box_resized[0] + box_resized[2]) // 16)
             rois.append([xmin, ymin, xmax, ymax])
             # box = dp["boxes"][frame_idx]
             # crop = frame[box[1]:box[1] + box[3], box[0]: box[0] + box[2], :]

@@ -2,22 +2,65 @@ import torch
 from torch import nn
 import torchvision.models as models
 import torch.nn.functional as F
+import math
+
+class PositionalEncoding(nn.Module):
+
+    def __init__(self, d_model, dropout=0.1, max_len=5000):
+        super(PositionalEncoding, self).__init__()
+        self.dropout = nn.Dropout(p=dropout)
+
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        pe = pe.unsqueeze(0).transpose(0, 1)
+        self.register_buffer('pe', pe)
+
+    def forward(self, x):
+        x = x + self.pe[:x.size(0), :]
+        return self.dropout(x)
 
 
 class RNN(nn.Module):
-    def __init__(self, cfg, num_words):
+    def __init__(self, cfg, num_words, padding_idx):
         super().__init__()
         self.cfg = cfg
+        self.padding_idx = padding_idx
+        self.pos_encoder = PositionalEncoding(cfg.MODEL.RNN.HIDDEN, max_len=30)
         self.embedding = nn.Embedding(num_words, cfg.MODEL.RNN.HIDDEN)
         self.rnn = nn.TransformerEncoder(
             nn.TransformerEncoderLayer(d_model=cfg.MODEL.RNN.HIDDEN, nhead=8),
             num_layers=cfg.MODEL.RNN.LAYERS
         )
+        self.src_mask = None
+        self.hidden_size = cfg.MODEL.RNN.HIDDEN
+        self.init_weights()
+
+    def init_weights(self):
+        initrange = 0.1
+        self.embedding.weight.data.uniform_(-initrange, initrange)
+
+    def _generate_square_subsequent_mask(self, sz):
+        mask = (torch.triu(torch.ones(sz, sz)) == 1).transpose(0, 1)
+        mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
+        return mask
+
+    def make_pad_mask(self, idx):
+        # len, bs to bs, len
+        return (idx == self.padding_idx).transpose(1, 0)
 
     def forward(self, x):
-        x = self.embedding(x)
-        x = F.dropout(x, training=self.training)
-        x = self.rnn(x)
+        # if self.src_mask is None or self.src_mask.size(0) != len(x):
+        #     device = x.device
+        #     mask = self._generate_square_subsequent_mask(len(x)).to(device)
+        #     self.src_mask = mask
+        mask = self.make_pad_mask(x)
+        # print(mask)
+        x = self.embedding(x) * math.sqrt(self.hidden_size)
+        x = self.pos_encoder(x)
+        x = self.rnn(x, src_key_padding_mask=mask)
         length, bs, emb = x.shape
         return x.permute(1, 0, 2)
         # global_ratio = self.linears[1](x.reshape(-1, emb)).reshape(length, bs, 1)
@@ -104,9 +147,9 @@ class SELayer(nn.Module):
 
 
 class MyModel(nn.Module):
-    def __init__(self, cfg, num_words):
+    def __init__(self, cfg, num_words, padding_idx):
         super().__init__()
-        self.rnn = RNN(cfg, num_words)
+        self.rnn = RNN(cfg, num_words, padding_idx)
         self.cnn = CNN(cfg)
         self.a = nn.Sequential(nn.BatchNorm1d(1024), nn.Linear(1024, 1024))
         self.b = nn.Sequential(nn.BatchNorm2d(1024), nn.Conv2d(1024, 1024, 1))
