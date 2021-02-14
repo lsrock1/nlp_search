@@ -3,10 +3,12 @@ from configs import get_default_config
 from model import MyModel
 from transforms import build_transforms
 from loss import TripletLoss, sigmoid_focal_loss, sampling_loss, reduce_sum
+from scheduler import WarmupMultiStepLR
 
 import torch.backends.cudnn as cudnn
 from torch.utils.data import DataLoader, DistributedSampler
 import torch
+from torch import nn
 from torch.optim.lr_scheduler import MultiStepLR
 import torch.nn.functional as F
 import torch.distributed as dist
@@ -27,16 +29,18 @@ def train_model_on_dataset(rank, cfg):
     cudnn.benchmark = True
     dataset = CityFlowNLDataset(cfg, build_transforms(cfg))
 
-    model = MyModel(cfg, len(dataset.nl), dataset.nl.word_to_idx['<PAD>']).cuda()
+    model = MyModel(cfg, len(dataset.nl), dataset.nl.word_to_idx['<PAD>'], norm_layer=nn.SyncBatchNorm).cuda()
     model = DistributedDataParallel(model, device_ids=[rank],
                                     output_device=rank,
                                     broadcast_buffers=cfg.num_gpu > 1)
     optimizer = torch.optim.Adam(
             params=model.parameters(),
             lr=cfg.TRAIN.LR.BASE_LR, weight_decay=0.00003)
-    lr_scheduler = MultiStepLR(optimizer,
+    lr_scheduler = WarmupMultiStepLR(optimizer,
                             milestones=cfg.TRAIN.STEPS,
-                            gamma=cfg.TRAIN.LR.WEIGHT_DECAY)
+                            gamma=cfg.TRAIN.LR.WEIGHT_DECAY,
+                            warmup_factor=cfg.TRAIN.WARMUP_FACTOR,
+                            warmup_iters=cfg.TRAIN.WARMUP_EPOCH)
 
     if cfg.resume_epoch > 0:
         model.load_state_dict(torch.load(f'save/{cfg.resume_epoch}.pth'))

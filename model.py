@@ -75,11 +75,13 @@ class RNN(nn.Module):
 
 
 class CNN(nn.Module):
-    def __init__(self, cfg):
+    def __init__(self, cfg, norm_layer):
         super().__init__()
         self.cfg = cfg
         # self.global_embedding = models.vgg16(pretrained=True).features
-        self.global_embedding = models.resnet50(pretrained=True)
+        self.global_embedding = models.resnet50(pretrained=True, norm_layer=norm_layer)
+        self.global_embedding.layer4[0].conv2.stride = 1
+        self.global_embedding.layer4[0].downsample[0].stride = 1
         self.global_embedding = nn.Sequential(
             self.global_embedding.conv1,
             self.global_embedding.bn1,
@@ -88,7 +90,7 @@ class CNN(nn.Module):
             self.global_embedding.layer1,
             self.global_embedding.layer2,
             self.global_embedding.layer3,
-            # self.global_embedding.layer4
+            self.global_embedding.layer4
         )
         #
         # self.local_embedding = models.resnet50(pretrained=True)
@@ -132,9 +134,9 @@ class SELayer(nn.Module):
         super(SELayer, self).__init__()
         self.avg_pool = nn.AdaptiveAvgPool2d(1)
         self.fc = nn.Sequential(
-            nn.Linear(channel, channel // reduction, bias=False),
+            nn.Linear(channel, channel // reduction),
             nn.ReLU(inplace=True),
-            nn.Linear(channel // reduction, channel, bias=False),
+            nn.Linear(channel // reduction, channel),
             nn.Sigmoid()
         )
 
@@ -147,21 +149,21 @@ class SELayer(nn.Module):
 
 
 class MyModel(nn.Module):
-    def __init__(self, cfg, num_words, padding_idx):
+    def __init__(self, cfg, num_words, padding_idx, norm_layer=None):
         super().__init__()
         self.rnn = RNN(cfg, num_words, padding_idx)
-        self.cnn = CNN(cfg)
-        self.a = nn.Sequential(nn.BatchNorm1d(1024), nn.Linear(1024, 1024))
-        self.b = nn.Sequential(nn.BatchNorm2d(1024), nn.Conv2d(1024, 1024, 1))
-        self.c = nn.Sequential(nn.BatchNorm1d(1024), nn.Linear(1024, 1024))
-        self.d = nn.Sequential(nn.BatchNorm2d(1024), nn.Conv2d(1024, 1024, 1))
+        self.cnn = CNN(cfg, norm_layer)
+        self.a = nn.Linear(2048, 2048)
+        self.b = nn.Conv2d(2048, 2048, 1)
+        self.c = nn.Linear(2048, 2048)
+        self.d = nn.Conv2d(2048, 2048, 1)
 
-        self.se = SELayer(1024)
+        self.se = SELayer(2048)
         self.out = nn.Sequential(
             nn.Conv2d(2048, 1024, 3, padding=1), nn.BatchNorm2d(1024), nn.ReLU(True),
             nn.Conv2d(1024, 512, 3, padding=1), nn.BatchNorm2d(512), nn.ReLU(True),
-            nn.Conv2d(512, 512, 3, padding=1), nn.BatchNorm2d(512), nn.ReLU(True),
-            nn.Conv2d(512, 1, 3, padding=1))
+            nn.Conv2d(512, 256, 3, padding=1), nn.BatchNorm2d(256), nn.ReLU(True),
+            nn.Conv2d(256, 1, 3, padding=1))
 
     def forward(self, nl, global_img):
         if self.training:
@@ -174,9 +176,9 @@ class MyModel(nn.Module):
         img_ft_b = self.b(img_ft)
         bs, c, h, w = img_ft_b.shape
         # bs, t, hw
-        relation = torch.bmm(self.a(nl.reshape(-1, emb)).reshape(bs, length, emb), img_ft_b.reshape(bs, c, -1))
+        relation = torch.bmm(self.a(nl), img_ft_b.reshape(bs, c, -1))
         weights = F.softmax(relation, dim=1)
-        weighted_img_ft = torch.bmm(self.c(nl.reshape(-1, emb)).reshape(bs, length, emb).permute(0, 2, 1), weights)
+        weighted_img_ft = torch.bmm(self.c(nl).permute(0, 2, 1), weights)
         img_ft = weighted_img_ft.reshape(bs, c, h, w) + img_ft
         
         weights = F.softmax(relation, dim=2)
@@ -189,6 +191,7 @@ class MyModel(nn.Module):
         nl = nl.mean(dim=1).unsqueeze(-1).unsqueeze(-1)
         img_ft = img_ft * se.unsqueeze(dim=-1).unsqueeze(dim=-1)
         nl = nl.reshape(nl.shape[0], -1, 1, 1)
-        nl = nl.expand(-1, -1, img_ft.shape[2], img_ft.shape[3])
-        last = torch.cat([img_ft, nl], dim=1)
+        last = img_ft + nl
+        # nl = nl.expand(-1, -1, img_ft.shape[2], img_ft.shape[3])
+        # last = torch.cat([img_ft, nl], dim=1)
         return self.out(last)#.sigmoid()

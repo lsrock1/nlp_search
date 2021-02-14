@@ -16,13 +16,15 @@ with open(os.path.join('data/special_case.pkl'), 'rb') as handle:
 #     if 'dark' in i:
 #         print(i)
 print(special_case)
-# with open('data/data/train-tracks.json') as f:
-#     tracks = json.load(f)
-# list_of_tracks = list(tracks.values())
-# for track in list_of_tracks:
-#     for n in track['nl']:
-#         # if 'pick' in n.lower():
-#         #     print(n)
+with open('data/data/train-tracks.json') as f:
+    tracks = json.load(f)
+list_of_tracks = list(tracks.values())
+for track in list_of_tracks:
+    for n in track['nl']:
+        if 'blue-black' in n.lower():# and 'black' in n.lower():
+            print(n)
+        # if 'pick' in n.lower():
+        #     print(n)
 #         if 'dark-' in n.lower():
 #             print(n.replace('dark-red', 'dark-red'.replace('-', ' ')))
 # print('pickup' in a)
