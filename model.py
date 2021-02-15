@@ -52,15 +52,15 @@ class RNN(nn.Module):
         return (idx == self.padding_idx).transpose(1, 0)
 
     def forward(self, x):
-        # if self.src_mask is None or self.src_mask.size(0) != len(x):
-        #     device = x.device
-        #     mask = self._generate_square_subsequent_mask(len(x)).to(device)
-        #     self.src_mask = mask
+        if self.src_mask is None or self.src_mask.size(0) != len(x):
+            device = x.device
+            mask = self._generate_square_subsequent_mask(len(x)).to(device)
+            self.src_mask = mask
         mask = self.make_pad_mask(x)
         # print(mask)
         x = self.embedding(x) * math.sqrt(self.hidden_size)
         x = self.pos_encoder(x)
-        x = self.rnn(x, src_key_padding_mask=mask)
+        x = self.rnn(x, self.src_mask, src_key_padding_mask=mask)
         length, bs, emb = x.shape
         return x.permute(1, 0, 2)
         # global_ratio = self.linears[1](x.reshape(-1, emb)).reshape(length, bs, 1)

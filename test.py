@@ -23,7 +23,7 @@ num_of_vehicles = None
 
 cfg = get_default_config()
 dataset = CityFlowNLInferenceDataset(cfg, build_transforms(cfg), num_of_vehicles)
-model = MyModel(cfg, len(dataset.nl)).cuda()
+model = MyModel(cfg, len(dataset.nl), dataset.nl.word_to_idx['<PAD>']).cuda()
 loader = DataLoader(dataset, batch_size=1, shuffle=False, num_workers=4)
 uuids, nls = query(cfg)
 
