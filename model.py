@@ -55,7 +55,7 @@ class RNN(nn.Module):
         self.pos_encoder = PositionalEncoding(cfg.MODEL.RNN.HIDDEN, max_len=30)
         self.embedding = nn.Embedding(num_words, cfg.MODEL.RNN.HIDDEN)
         self.rnn = nn.TransformerEncoder(
-            nn.TransformerEncoderLayer(d_model=cfg.MODEL.RNN.HIDDEN, nhead=8),
+            nn.TransformerEncoderLayer(d_model=cfg.MODEL.RNN.HIDDEN, nhead=4),
             num_layers=cfg.MODEL.RNN.LAYERS
         )
         self.src_mask = None
@@ -87,15 +87,6 @@ class RNN(nn.Module):
         x = self.rnn(x, self.src_mask, src_key_padding_mask=mask)
         length, bs, emb = x.shape
         return x.permute(1, 0, 2)
-        # global_ratio = self.linears[1](x.reshape(-1, emb)).reshape(length, bs, 1)
-        # global_ratio = F.softmax(global_ratio, dim=0)
-  
-        # local_ratio = self.linears[2](x.reshape(-1, emb)).reshape(length, bs, 1)
-        # local_ratio = F.softmax(local_ratio, dim=0)
-        # x = self.linears[0](x.reshape(-1, emb)).reshape(length, bs, -1)
-        # global_feature = (global_ratio * x).sum(dim=0)
-        # local_vector = (local_ratio * x).sum(dim=0)
-        # return torch.cat([global_feature, local_vector], dim=-1)
 
 
 class CNN(nn.Module):
@@ -116,58 +107,24 @@ class CNN(nn.Module):
             self.global_embedding.layer3,
             self.global_embedding.layer4
         )
-        #
-        # self.local_embedding = models.resnet50(pretrained=True)
-        # self.local_embedding = nn.Sequential(
-        #     self.local_embedding.conv1,
-        #     self.local_embedding.bn1,
-        #     self.local_embedding.relu,
-        #     self.local_embedding.maxpool,
-        #     self.local_embedding.layer1,
-        #     self.local_embedding.layer2,
-        #     self.local_embedding.layer3,
-        #     self.local_embedding.layer4, nn.AdaptiveAvgPool2d(1), nn.Flatten(start_dim=1)
-        # )
-        # self.local_embedding = nn.Sequential(
-        #    models.vgg16(pretrained=True).features, nn.AdaptiveAvgPool2d(1), nn.Flatten(start_dim=1))
-
-        # self.linears = nn.ModuleList([
-        #     nn.Conv2d(512, cfg.MODEL.CNN.ATTN_CHANNEL, 1), nn.Linear(512, cfg.MODEL.CNN.ATTN_CHANNEL)])
-        # self.out_linear = nn.ModuleList([
-        #     nn.Conv2d(512, cfg.MODEL.CNN.ATTN_CHANNEL, 1), nn.Linear(512, cfg.MODEL.CNN.ATTN_CHANNEL)])
 
     def forward(self, global_img):
         return self.global_embedding(global_img)
-        # global_feature = self.global_embedding(global_img)
-        # local_vector = self.local_embedding(local_img)
-
-        # weights = self.linears[0](global_feature).flatten(start_dim=2).permute(0, 2, 1).bmm(
-        #     self.linears[1](local_vector).unsqueeze(-1)).permute(0, 2, 1)
-        # weights = F.conv2d(self.linears[0](global_feature), local_vector).flatten(start_dim=2)
-        # weights = F.softmax(weights, dim=-1)
-        # print(weights.shape)
-        # print(global_feature.shape)
-        # global_feature = self.out_linear[0](global_feature).flatten(start_dim=2) * weights
-        # global_feature = global_feature.sum(dim=-1)
-
-        # return torch.cat([global_feature, self.out_linear[1](local_vector.flatten(start_dim=1))], dim=1)
 
 
 class SELayer(nn.Module):
-    def __init__(self, channel, reduction=16):
+    def __init__(self, channel, out_channel, reduction=16):
         super(SELayer, self).__init__()
         self.avg_pool = nn.AdaptiveAvgPool2d(1)
         self.fc = nn.Sequential(
-            nn.Linear(channel, channel // reduction),
+            nn.Linear(channel, out_channel // reduction),
             nn.ReLU(inplace=True),
-            nn.Linear(channel // reduction, channel),
-            nn.Sigmoid()
+            nn.Linear(out_channel // reduction, out_channel),
         )
 
     def forward(self, x):
         b, t, c = x.size()
         y = x.mean(dim=1)
-        # y = self.avg_pool(x).view(b, c)
         y = self.fc(y)
         return y
 
@@ -256,6 +213,88 @@ class MyModel(nn.Module):
         else:
             pred_map = self.out(last)
             vectors = (last * activation_map).sum(dim=(2, 3)) / activation_map.sum(dim=(2, 3))
+            color = self.color(vectors)
+            types = self.types(vectors)
+            return pred_map, color, types
+
+
+class FilmBlock(nn.Module):
+    def __init__(self, resblock, rnn_dim, channel, h, w):
+        self.block = resblock
+        self.channel = channel
+        self.embeddings = nn.ModuleList([
+            nn.Conv2d(channel, channel, 1),
+            nn.Linear(rnn_dim, channel),
+            nn.Linear(rnn_dim, channel)
+        ])
+        self.se = SELayer(rnn_dim, channel * 2)
+        self.pos = PositionalEncoding2D(channel, h, w)
+
+    def forward(self, x, nl):
+        # bs, c, h, w
+        bs, c, h, w = x.shape
+        x = self.pos(x)
+        x = self.block(x)
+        x_a = self.embeddings[0](x).reshape(bs, c, -1)
+        # bs, len, c
+        nl_a = self.embeddings[1](nl)
+        # bs, len, hw
+        weights = F.softmax(nl_a.bmm(x_a), dim=1)
+        # bs, c, h, w
+        x = self.embedding[2](nl).permute(0, 2, 1).bmm(weights).reshape(bs, c, h, w) + x
+        
+        alpha, beta = self.se(nl.mean(dim=1)).split(self.channel)
+        x * alpha.reshape(bs, self.channel, 1, 1) + beta.reshape(bs, self.channel, 1, 1)
+        return x
+
+
+class MyFilm(nn.Module):
+    def __init__(self, cfg, num_words, padding_idx, norm_layer, num_colors, num_types):
+        super().__init__()
+        if norm_layer == None:
+            norm_layer = nn.BatchNorm2d
+        self.rnn = RNN(cfg, num_words, padding_idx)
+        h, w = cfg.DATA.GLOBAL_SIZE
+        cnn = models.resnet50(pretrained=True, norm_layer=norm_layer)
+        cnn.layer4[0].conv2.stride = 1
+        cnn.layer4[0].downsample[0].stride = 1
+        self.stem = nn.Sequential(
+            cnn.conv1, cnn.bn1, cnn.relu
+        )
+        self.film1 = FilmBlock(cnn.layer1, cfg.MODEL.RNN.HIDDEN, 64 * 4, h//4, w//4)
+        self.film2 = FilmBlock(cnn.layer2, cfg.MODEL.RNN.HIDDEN, 128 * 4, h//8, w//8)
+        self.film3 = FilmBlock(cnn.layer3, cfg.MODEL.RNN.HIDDEN, 256 * 4, h//16, w//16)
+        self.film4 = FilmBlock(cnn.layer4, cfg.MODEL.RNN.HIDDEN, 512 * 4, h//16, w//16)
+
+        self.out = nn.Sequential(
+            nn.Conv2d(2048, 1024, 3, padding=1), norm_layer(1024), nn.ReLU(True),
+            nn.Conv2d(1024, 512, 3, padding=1), norm_layer(512), nn.ReLU(True),
+            nn.Conv2d(512, 256, 3, padding=1), norm_layer(256), nn.ReLU(True),
+            nn.Conv2d(256, 1, 3, padding=1))
+        
+        if norm_layer == nn.BatchNorm2d:
+            norm_layer = nn.BatchNorm1d
+
+        self.color = nn.Sequential(
+            norm_layer(2048), nn.Linear(2048, num_colors)
+        )
+        self.types = nn.Sequential(
+            norm_layer(2048), nn.Linear(2048, num_types)
+        )
+
+    def forward(self, nl, global_img, activation_map=None):
+        nl = self.rnn(nl)
+        img = self.stem(global_img)
+        img = self.film1(img, nl)
+        img = self.film2(img, nl)
+        img = self.film3(img, nl)
+        img = self.film4(img, nl)
+
+        if not self.training:
+            return self.out(img)#.sigmoid()
+        else:
+            pred_map = self.out(img)
+            vectors = (img * activation_map).sum(dim=(2, 3)) / activation_map.sum(dim=(2, 3))
             color = self.color(vectors)
             types = self.types(vectors)
             return pred_map, color, types

@@ -1,6 +1,6 @@
 from dataset import CityFlowNLDataset
 from configs import get_default_config
-from model import MyModel
+from model import MyModel, MyFilm
 from transforms import build_transforms
 from loss import TripletLoss, sigmoid_focal_loss, sampling_loss, reduce_sum, LabelSmoothingLoss
 from scheduler import WarmupMultiStepLR
