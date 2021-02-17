@@ -4,6 +4,30 @@ import torchvision.models as models
 import torch.nn.functional as F
 import math
 
+
+class PositionalEncoding2D(nn.Module):
+
+    def __init__(self, d_model, height_max, width_max, dropout=0.1):
+        super(PositionalEncoding2D, self).__init__()
+        self.dropout = nn.Dropout(p=dropout)
+        pe = torch.zeros(d_model, height_max, width_max)
+        # Each dimension use half of d_model
+        d_model = int(d_model / 2)
+        div_term = torch.exp(torch.arange(0., d_model, 2) *
+                            -(math.log(10000.0) / d_model))
+        pos_w = torch.arange(0., width_max).unsqueeze(1)
+        pos_h = torch.arange(0., height_max).unsqueeze(1)
+        pe[0:d_model:2, :, :] = torch.sin(pos_w * div_term).transpose(0, 1).unsqueeze(1).repeat(1, height_max, 1)
+        pe[1:d_model:2, :, :] = torch.cos(pos_w * div_term).transpose(0, 1).unsqueeze(1).repeat(1, height_max, 1)
+        pe[d_model::2, :, :] = torch.sin(pos_h * div_term).transpose(0, 1).unsqueeze(2).repeat(1, 1, width_max)
+        pe[d_model + 1::2, :, :] = torch.cos(pos_h * div_term).transpose(0, 1).unsqueeze(2).repeat(1, 1, width_max)
+        self.register_buffer('pe', pe)
+
+    def forward(self, x):
+        x = x + self.pe[:, :x.shape[2], :x.shape[3]]
+        return self.dropout(x)
+
+
 class PositionalEncoding(nn.Module):
 
     def __init__(self, d_model, dropout=0.1, max_len=5000):
@@ -149,8 +173,10 @@ class SELayer(nn.Module):
 
 
 class MyModel(nn.Module):
-    def __init__(self, cfg, num_words, padding_idx, norm_layer=None):
+    def __init__(self, cfg, num_words, padding_idx, norm_layer, num_colors, num_types):
         super().__init__()
+        if norm_layer == None:
+            norm_layer = nn.BatchNorm2d
         self.rnn = RNN(cfg, num_words, padding_idx)
         self.cnn = CNN(cfg, norm_layer)
         self.a = nn.Linear(2048, 2048)
@@ -160,12 +186,27 @@ class MyModel(nn.Module):
 
         self.se = SELayer(2048)
         self.out = nn.Sequential(
-            nn.Conv2d(2048, 1024, 3, padding=1), nn.BatchNorm2d(1024), nn.ReLU(True),
-            nn.Conv2d(1024, 512, 3, padding=1), nn.BatchNorm2d(512), nn.ReLU(True),
-            nn.Conv2d(512, 256, 3, padding=1), nn.BatchNorm2d(256), nn.ReLU(True),
+            nn.Conv2d(2048, 1024, 3, padding=1), norm_layer(1024), nn.ReLU(True),
+            nn.Conv2d(1024, 512, 3, padding=1), norm_layer(512), nn.ReLU(True),
+            nn.Conv2d(512, 256, 3, padding=1), norm_layer(256), nn.ReLU(True),
             nn.Conv2d(256, 1, 3, padding=1))
+        
+        if norm_layer == nn.BatchNorm2d:
+            norm_layer = nn.BatchNorm1d
 
-    def forward(self, nl, global_img):
+        self.color = nn.Sequential(
+            norm_layer(2048), nn.Linear(2048, num_colors)
+        )
+        self.types = nn.Sequential(
+            norm_layer(2048), nn.Linear(2048, num_types)
+        )
+
+        self.pos = PositionalEncoding2D(2048, 24, 24)
+        self.attn = nn.ModuleList([
+            nn.Conv2d(2048, 512, 1), nn.Conv2d(2048, 2048, 1), nn.Conv2d(2048, 2048, 1)
+        ])
+
+    def forward(self, nl, global_img, activation_map=None):
         if self.training:
             nl = self.rnn(nl)
             img_ft = self.cnn(global_img)
@@ -190,8 +231,31 @@ class MyModel(nn.Module):
         nl = nl * se.unsqueeze(dim=1)
         nl = nl.mean(dim=1).unsqueeze(-1).unsqueeze(-1)
         img_ft = img_ft * se.unsqueeze(dim=-1).unsqueeze(dim=-1)
+        
+        # ===== self attention =====
+        img_ft = self.pos(img_ft)
+        img_key = self.attn[0](img_ft).reshape(bs, 512, -1)
+        # bs, hw, hw
+        img_key = img_key.permute(0, 2, 1).contiguous().bmm(img_key)
+        img_key = F.softmax(img_key, dim=-1)
+
+        # bs, c, hw
+        img_value = self.attn[1](img_ft).reshape(bs, 2048, -1)
+        # bs, c, h, w
+        img_value = img_value.bmm(img_key.permute(0, 2, 1)).reshape(bs, c, h, w)
+        img_ft = img_ft + img_value
+        img_ft = self.attn[2](img_ft)
+        # ===== end self attention =====
+
         nl = nl.reshape(nl.shape[0], -1, 1, 1)
         last = img_ft + nl
         # nl = nl.expand(-1, -1, img_ft.shape[2], img_ft.shape[3])
         # last = torch.cat([img_ft, nl], dim=1)
-        return self.out(last)#.sigmoid()
+        if not self.training:
+            return self.out(last)#.sigmoid()
+        else:
+            pred_map = self.out(last)
+            vectors = (last * activation_map).sum(dim=(2, 3)) / activation_map.sum(dim=(2, 3))
+            color = self.color(vectors)
+            types = self.types(vectors)
+            return pred_map, color, types

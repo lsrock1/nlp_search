@@ -5,6 +5,8 @@ from transforms import build_transforms
 from loss import TripletLoss, sigmoid_focal_loss
 from utils import compute_probability_of_activations, save_img
 
+from torch.nn.parallel import DistributedDataParallel
+from torch import nn
 from torch.utils.data import DataLoader
 import torch
 from torch.optim.lr_scheduler import MultiStepLR
@@ -13,24 +15,33 @@ import numpy as np
 import os
 import shutil
 from tqdm import tqdm
+from glob import glob
 
 
-epoch = 50
+epoch = 19
 test_batch_size = 64
 scene_threshold = 0.8
 total_threshold = 0.8
-num_of_vehicles = None
+num_of_vehicles = 64
 
 cfg = get_default_config()
 dataset = CityFlowNLInferenceDataset(cfg, build_transforms(cfg), num_of_vehicles)
 model = MyModel(cfg, len(dataset.nl), dataset.nl.word_to_idx['<PAD>']).cuda()
+
 loader = DataLoader(dataset, batch_size=1, shuffle=False, num_workers=4)
 uuids, nls = query(cfg)
 
-model.load_state_dict(torch.load(f'save/{epoch}.pth'))
+saved_dict = torch.load(f'save/{epoch}.pth')
+
+n = {}
+for k, v in saved_dict.items():
+    n[k.replace('module.', '')] = v
+
+model.load_state_dict(n)
 model.eval()
 
-shutil.rmtree('results')
+if os.path.exists('results'):
+    shutil.rmtree('results')
 os.mkdir('results')
 
 cache_img_ft = {}
@@ -50,14 +61,14 @@ if not os.path.exists(f'cache/{epoch}'):
             cache = []
 
             # version 3
-            if b <= test_batch_size:
-                cache = model.cnn(frames)
-                torch.save(cache, f'cache/{epoch}/{idx}.pth')
-            else:
-                cache = []
-                for f in frames.split(test_batch_size):
-                    cache.append(model.cnn(f))
-                torch.save(torch.cat(cache, dim=0), f'cache/{epoch}/{idx}.pth')
+            # if b <= test_batch_size:
+            #     cache = model.cnn(frames)
+            #     torch.save(cache, f'cache/{epoch}/{idx}_0.pth')
+            # else:
+            #     cache = []
+            for i, f in enumerate(frames.split(test_batch_size)):
+                cache = model.cnn(f)
+                torch.save(cache, f'cache/{epoch}/{idx}_{i}.pth')
 
             # version 2
             # b = num_of_vehicles if num_of_vehicles <= b else b
@@ -83,6 +94,7 @@ if not os.path.exists(f'cache/{epoch}'):
 
 dataset.load_frame = False
 
+mem = {}
 for nlidx, (uuid, query_nl) in enumerate(zip(uuids, nls)):
     print(f'{nlidx} / {len(nls)}')
     cache_nl = torch.load(f'cache/{epoch}/{uuid}.pth')
@@ -95,31 +107,51 @@ for nlidx, (uuid, query_nl) in enumerate(zip(uuids, nls)):
         with torch.no_grad():
             boxes = boxes.squeeze(0).numpy()
             rois = rois.squeeze(0).numpy()
+            # print(rois)
             # frames = frames.squeeze(0)
             # print(frames.shape)
             # b = frames.shape[0]
             text = query_nl[0]
-
-            # version 3
-            cache = torch.load(f'cache/{epoch}/{idx}.pth')
             
-            b = cache.shape[0]
-            if b <= test_batch_size:
-                results = model(cache_nl[0], cache).sigmoid().cpu().detach().numpy()
-            else:
+            # if idx in mem:
+            #     cache = mem[idx]
+            # else:
+            
+            if num_of_vehicles == None:
+                # version 3
                 results = []
-                for c in cache.split(test_batch_size):
-                    output = model(cache_nl[0], c).sigmoid()
-                    results.append(output.cpu())
+                caches = sorted(glob(f'cache/{epoch}/{idx}_*'), key = lambda x: int(x.split('_')[-1][:-4]))
+                for cache_path in caches:
+                    c = torch.load(cache_path)
+
+                    output = model(cache_nl[0].expand(c.shape[0], -1, -1), c).sigmoid() +\
+                            model(cache_nl[1].expand(c.shape[0], -1, -1), c).sigmoid() +\
+                            model(cache_nl[2].expand(c.shape[0], -1, -1), c).sigmoid()
+                    results.append(output / 3)
                 results = torch.cat(results, dim=0).cpu().detach().numpy()
-            # for batch_idx in range(cache.shape[0]):
-            #     output = model(cache_nl[0], cache[batch_idx:batch_idx+1]).sigmoid()
-            #     results.append(output.squeeze(0).cpu().detach().numpy())
+                # cache = torch.load(f'cache/{epoch}/{idx}.pth')
+                # b = cache.shape[0]
+                # if b <= test_batch_size:
+                #     cache_nl_ = cache_nl[0].expand(cache.shape[0], -1, -1)
+                #     results = model(cache_nl_.cuda(), cache.cuda()).sigmoid().cpu().detach().numpy()
+                # else:
+                #     results = []
+                #     for c in cache.split(test_batch_size):
+                #         cache_nl_ = cache_nl[0].expand(c.shape[0], -1, -1)
+                #         output = model(cache_nl_.cuda(), c.cuda()).sigmoid()
+                #         results.append(output.cpu())
+                #     results = torch.cat(results, dim=0).cpu().detach().numpy()
+                # for batch_idx in range(cache.shape[0]):
+                #     output = model(cache_nl[0], cache[batch_idx:batch_idx+1]).sigmoid()
+                #     results.append(output.squeeze(0).cpu().detach().numpy())
             
-            # version 2
-            # cache = torch.load(f'cache/{epoch}/{idx}.pth')
-            # nl = cache_nl[0].expand(cache.shape[0], -1, -1)
-            # results = model(nl, cache).sigmoid().cpu().detach().numpy()
+            else:
+                # version 2
+                cache = torch.load(f'cache/{epoch}/{idx}_0.pth')
+                cache = cache[:num_of_vehicles]
+                # print(cache.shape)
+                nl = cache_nl[0].expand(cache.shape[0], -1, -1)
+                results = model(nl.cuda(), cache.cuda()).sigmoid().cpu().detach().numpy()
             
             # version 1
             # cache = torch.load(f'cache/{epoch}/{idx}.pth')
@@ -132,7 +164,7 @@ for nlidx, (uuid, query_nl) in enumerate(zip(uuids, nls)):
             # print(idx, ': ', prob)
             if not os.path.exists('results/' + query_nl[0]):
                 os.mkdir('results/' + query_nl[0])
-            if prob > total_threshold:
+            if prob >= total_threshold:
                 save_img(np.squeeze(results[0], axis=0) * 255, cv2.imread(paths[0][0]), boxes[0], f"results/{query_nl[0]}/{idx}_{prob}.png")
             # for i, o in enumerate(results):
             #     # print(paths)

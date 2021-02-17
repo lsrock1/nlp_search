@@ -9,6 +9,7 @@ import random
 import numpy as np
 from collections import defaultdict
 import pickle
+from collections import Counter
 
 import cv2
 import torch
@@ -51,6 +52,9 @@ class NL:
 
         # special case handling
         except_case = ['dark-red', 'dark-blue', 'dark-colored']
+        hand_case = {
+            'hatckback': 'hatchback'
+        }
         self.special_case = {}
         for t in tracks:
             for n in t['nl']:
@@ -60,6 +64,7 @@ class NL:
         
         for ec in except_case:
             self.special_case[ec] = ec.replace('-', ' ')
+        self.special_case.update(hand_case)
         
         # self.special_case = special_case
                         
@@ -126,13 +131,22 @@ class CityFlowNLDataset(Dataset):
         :param data_cfg: CfgNode for CityFlow NL.
         """
         self.data_cfg = data_cfg.clone()
+        self.vehicle_type = ['bus', 'pickup','sedan', 'suv', 'van', 'wagon', 'cargo', 'mpv', 'hatchback', 'coup','truck', 'minivan']
+        self.colors = ['silver', 'red', 'white', 'brown', 'gold','black', 'gray', 'blue', 'purple', 'yellow', 'orange', 'green']
         with open(self.data_cfg.DATA.JSON_PATH) as f:
             tracks = json.load(f)
         self.list_of_uuids = list(tracks.keys())
         self.list_of_tracks = list(tracks.values())
         self.list_of_crops = list()
         self.nl = NL(data_cfg, self.list_of_tracks)
-        for track in self.list_of_tracks:
+
+        # if os.path.exists(os.path.join(self.data_cfg.DATA.DICT_PATH, 'list_of_crops.pkl')):
+        #     with open(os.path.join(self.data_cfg.DATA.DICT_PATH, 'list_of_crops.pkl'), 'rb') as handle:
+        #         self.list_of_crops = pickle.load(handle)
+        #     # self.list_of_crops = 
+        # else:
+        for track_idx, track in enumerate(self.list_of_tracks):
+            # print(track_idx, '/', len(self.list_of_tracks))
             for frame_idx, frame in enumerate(track["frames"]):
                 if not os.path.exists(os.path.join(self.data_cfg.DATA.CITYFLOW_PATH, frame)):
                     # print(os.path.join(self.data_cfg.DATA.CITYFLOW_PATH, frame))
@@ -142,16 +156,128 @@ class CityFlowNLDataset(Dataset):
                 #nl_idx = int(random.uniform(0, 3))
                 nl = track["nl"]#[nl_idx]
                 box = track["boxes"][frame_idx]
-
+                # crop = {"frame": frame_path, "nl": nl, "box": box}
+                # self.list_of_crops.append(crop)
                 # expand nls
+                nl, vehicle_type = self.type_replacer(nl)
+                if vehicle_type == -1:
+                    continue
+                nl, vehicle_color = self.color_replacer(nl)
+                if vehicle_color == -1:
+                    continue
+                # print(len(nl))
+                # print(nl)
                 for n in nl:
-                    crop = {"frame": frame_path, "nl": self.nl.sentence_to_index(n), "box": box}
+                    crop = {"frame": frame_path, "nl": n, "box": box, "color": vehicle_color, "type": vehicle_type}
                     self.list_of_crops.append(crop)
-        
+            # with open(os.path.join(self.data_cfg.DATA.DICT_PATH, 'list_of_crops.pkl'), 'wb') as handle:
+            #     pickle.dump(self.list_of_crops, handle, protocol=pickle.HIGHEST_PROTOCOL)
         self.transforms = transforms
+        print('data loading end')
 
     def __len__(self):
         return len(self.list_of_crops)
+
+    def color_replacer(self, nls):
+        # cleaning noise in nl
+        color_replace = {
+            'reddish': 'red',
+            'maroon': 'red', 'whit ': 'white ', 'golden': 'gold', 'grey' :'gray', 'lightgray': 'gray'
+        }
+        
+        colors_in_nls = []
+        replace_list = []
+        nls = [n.lower() for n in nls]
+        new_nls = []
+        for nl in nls:
+            for k, v in color_replace.items():
+                if k in nl:
+                    nl = nl.replace(k, v)
+            new_nls.append(nl)
+        nls = new_nls
+        for nl in nls:
+            # n = n.lower()
+            colors_in_nl = []
+            
+            for c in self.colors:
+                index = nl.find(c)
+                if index != -1:
+                    # colors_in_nls.add(c)
+                    colors_in_nl.append((c, index))
+            colors_in_nl = sorted(colors_in_nl, key=lambda x: x[1])
+            if len(colors_in_nl) > 0:
+                colors_in_nls.append(colors_in_nl[0][0])
+                replace_list.append(colors_in_nl[0][0])
+            else:
+                replace_list.append(None)
+        
+        if len(set(colors_in_nls)) > 1:
+            counters = Counter(colors_in_nls)
+            # nls = [t.lower() for t in track['nl']]
+            k = counters.most_common(1)
+            representer_color = k[0][0]
+            new_nls = []
+            for c, n in zip(replace_list, nls):
+                if c != None:
+                    new_nls.append(n.replace(c, representer_color))
+                else:
+                    new_nls.append(n)
+            return new_nls, self.colors.index(representer_color)
+        elif len(colors_in_nls) == 0:
+            return nls, -1
+        return nls, self.colors.index(colors_in_nls[0])
+
+    def type_replacer(self, nls):
+        # cleaning noise in nl
+        type_replace = {'hatckback': 'hatchback'}
+        types_in_nls = []
+        replace_list = []
+        nls = [n.lower() for n in nls]
+        new_nls = []
+        for nl in nls:
+            for k, v in type_replace.items():
+                if k in nl:
+                    nl = nl.replace(k, v)
+                # else:
+                #     new_nls.append(nl)
+            new_nls.append(nl)
+        nls = new_nls
+        for nl in nls:
+            types_in_nl = []
+            
+            for c in self.vehicle_type:
+                index = nl.find(c)
+                if index != -1:
+                    # colors_in_nls.add(c)
+                    types_in_nl.append((c, index))
+            types_in_nl = sorted(types_in_nl, key=lambda x: x[1])
+
+            if len(types_in_nl) > 0:
+                first_type = types_in_nl[0][0]
+                if first_type == 'truck':
+                    first_type = 'pickup'
+                elif first_type == 'minivan':
+                    first_type = 'van'
+                types_in_nls.append(first_type)
+                replace_list.append(first_type)
+            else:
+                replace_list.append(None)
+        
+        if len(set(types_in_nls)) > 1:
+            counters = Counter(types_in_nls)
+            # nls = [t.lower() for t in track['nl']]
+            k = counters.most_common(1)
+            representer_color = k[0][0]
+            new_nls = []
+            for c, n in zip(replace_list, nls):
+                if c != None:
+                    new_nls.append(n.replace(c, representer_color))
+                else:
+                    new_nls.append(n)
+            return new_nls, self.vehicle_type.index(representer_color)
+        elif len(types_in_nls) == 0:
+            return nls, -1
+        return nls, self.vehicle_type.index(types_in_nls[0])
 
     def bbox_aug(self, img, bbox, h, w):
         resized_h = int(h * 0.8)
@@ -202,11 +328,17 @@ class CityFlowNLDataset(Dataset):
         h, w, _ = frame.shape
         box = dp["box"]
         frame, box = self.bbox_aug(frame, box, h, w)
-        # print(frame.shape)
-        # frame = torch.from_numpy(frame).permute([2, 0, 1])
         
-        nl = dp["nl"]#[int(random.uniform(0, 3))]
-    
+        # if random.random() > 0.9:
+        #     # random nl
+        #     dp = random.choice(self.list_of_crops)
+        #     nl = dp["nl"]#[int(random.uniform(0, 3))]
+        #     # nl = self.nl.sentence_to_index(nl)
+        #     return torch.tensor(nl), frame, torch.zeros([1, self.data_cfg.DATA.GLOBAL_SIZE[0]//16, self.data_cfg.DATA.GLOBAL_SIZE[1]//16])
+        
+        nl = dp["nl"]#[0][int(random.uniform(0, 3))]
+        # print(nl)
+        nl = self.nl.sentence_to_index(nl)
         ymin, ymax = box[1], box[1] + box[3]
         xmin, xmax = box[0], box[0] + box[2]
         # frame = self.transforms(frame)
@@ -219,7 +351,7 @@ class CityFlowNLDataset(Dataset):
         label = torch.zeros([1, self.data_cfg.DATA.GLOBAL_SIZE[0]//16, self.data_cfg.DATA.GLOBAL_SIZE[1]//16])
         label[:, ymin:ymax, xmin:xmax] = 1
 
-        return torch.tensor(nl), frame, label
+        return torch.tensor(nl), frame, label, dp['color'], dp['type']
 
 
 class CityFlowNLInferenceDataset(Dataset):
@@ -284,9 +416,9 @@ class CityFlowNLInferenceDataset(Dataset):
                 frame, box_resized = self.bbox_aug(frame, box)
                 frames.append(frame)
             else:
-                # if idx == 0:
-                    # frame = cv2.imread(frame_path)
-                    # h, w, _ = frame.shape
+                if idx == 0:
+                    frame = cv2.imread(frame_path)
+                    h, w, _ = frame.shape
                 frames.append(torch.zeros(1))
             # boxes.append(box)
 
@@ -294,10 +426,10 @@ class CityFlowNLInferenceDataset(Dataset):
             xmin, xmax = box[0], box[0] + box[2]
             # frame = self.transforms[0](frame)
             boxes.append([xmin, ymin, xmax, ymax])
-            # h_ratio = self.data_cfg.DATA.GLOBAL_SIZE[0] / h
-            # w_ratio = self.data_cfg.DATA.GLOBAL_SIZE[1] / w
-            ymin, ymax = int(box_resized[1] // 16), int((box_resized[1] + box_resized[3]) // 16)
-            xmin, xmax = int(box_resized[0] // 16), int((box_resized[0] + box_resized[2]) // 16)
+            h_ratio = self.data_cfg.DATA.GLOBAL_SIZE[0] / h
+            w_ratio = self.data_cfg.DATA.GLOBAL_SIZE[1] / w
+            ymin, ymax = int(ymin * h_ratio // 16), int(ymax * h_ratio // 16)
+            xmin, xmax = int(xmin * w_ratio // 16), int(xmax * w_ratio // 16)
             rois.append([xmin, ymin, xmax, ymax])
             # box = dp["boxes"][frame_idx]
             # crop = frame[box[1]:box[1] + box[3], box[0]: box[0] + box[2], :]

@@ -2,7 +2,7 @@ from dataset import CityFlowNLDataset
 from configs import get_default_config
 from model import MyModel
 from transforms import build_transforms
-from loss import TripletLoss, sigmoid_focal_loss, sampling_loss, reduce_sum
+from loss import TripletLoss, sigmoid_focal_loss, sampling_loss, reduce_sum, LabelSmoothingLoss
 from scheduler import WarmupMultiStepLR
 
 import torch.backends.cudnn as cudnn
@@ -29,7 +29,7 @@ def train_model_on_dataset(rank, cfg):
     cudnn.benchmark = True
     dataset = CityFlowNLDataset(cfg, build_transforms(cfg))
 
-    model = MyModel(cfg, len(dataset.nl), dataset.nl.word_to_idx['<PAD>'], norm_layer=nn.SyncBatchNorm).cuda()
+    model = MyModel(cfg, len(dataset.nl), dataset.nl.word_to_idx['<PAD>'], norm_layer=nn.SyncBatchNorm, num_colors=len(dataset.colors), num_types=len(dataset.vehicle_type) - 2).cuda()
     model = DistributedDataParallel(model, device_ids=[rank],
                                     output_device=rank,
                                     broadcast_buffers=cfg.num_gpu > 1)
@@ -41,7 +41,8 @@ def train_model_on_dataset(rank, cfg):
                             gamma=cfg.TRAIN.LR.WEIGHT_DECAY,
                             warmup_factor=cfg.TRAIN.WARMUP_FACTOR,
                             warmup_iters=cfg.TRAIN.WARMUP_EPOCH)
-
+    color_loss = LabelSmoothingLoss(len(dataset.colors), 0.1)
+    vehicle_loss = LabelSmoothingLoss(len(dataset.vehicle_type) - 2, 0.1)
     if cfg.resume_epoch > 0:
         model.load_state_dict(torch.load(f'save/{cfg.resume_epoch}.pth'))
         optimizer.load_state_dict(torch.load(f'save/{cfg.resume_epoch}_optim.pth'))
@@ -54,13 +55,15 @@ def train_model_on_dataset(rank, cfg):
     # loader = DataLoader(dataset, batch_size=cfg.TRAIN.BATCH_SIZE, shuffle=True, num_workers=cfg.TRAIN.NUM_WORKERS)
     train_sampler = DistributedSampler(dataset)
     loader = DataLoader(dataset, batch_size=cfg.TRAIN.BATCH_SIZE //cfg.num_gpu,
-                            num_workers=cfg.TRAIN.NUM_WORKERS,# shuffle=True,
+                            num_workers=cfg.TRAIN.NUM_WORKERS // cfg.num_gpu,# shuffle=True,
                             sampler=train_sampler, pin_memory=True)
     for epoch in range(cfg.resume_epoch, cfg.TRAIN.EPOCH):
         losses = 0.
+        losses_color = 0.
+        losses_types = 0.
         precs = 0.
         train_sampler.set_epoch(epoch)
-        for idx, (nl, frame, label) in enumerate(loader):
+        for idx, (nl, frame, label, color_label, type_label) in enumerate(loader):
             # print(nl.shape)
             # print(global_img.shape)
             # print(local_img.shape)
@@ -71,7 +74,7 @@ def train_model_on_dataset(rank, cfg):
             frame = frame.cuda(non_blocking=True)
             # local_img = local_img.reshape(-1, 3, cfg.DATA.LOCAL_CROP_SIZE[0], cfg.DATA.LOCAL_CROP_SIZE[1])
             # global_img = global_img.reshape(-1, 3, cfg.DATA.GLOBAL_SIZE[0], cfg.DATA.GLOBAL_SIZE[1])
-            output = model(nl, frame)
+            output, color, types = model(nl, frame, label)
             # label_nl = torch.arange(nl.shape[0]).cuda()
             # label_img = label_nl.unsqueeze(1).expand(-1, cfg.DATA.NUM_IMG).flatten(start_dim=0).cuda()
             # loss, prec = triplet(nl, img_ft, label_nl, label_img)
@@ -84,12 +87,17 @@ def train_model_on_dataset(rank, cfg):
             num_pos_avg_per_gpu = max(total_num_pos / float(cfg.num_gpu), 1.0)
 
             loss = sigmoid_focal_loss(output, label, reduction='sum') / num_pos_avg_per_gpu
+            loss_color = color_loss(color, color_label.cuda())
+            loss_type = vehicle_loss(types, type_label.cuda())
+            loss_total = loss + loss_color + loss_type
             optimizer.zero_grad()
-            loss.backward()
+            loss_total.backward()
             # torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
             optimizer.step()
             
             losses += loss.item()
+            losses_color += loss_color.item()
+            losses_types += loss_type.item()
             # precs += recall.item()
             
             if rank == 0:
@@ -100,7 +108,12 @@ def train_model_on_dataset(rank, cfg):
 
                 accu = pred.sum().item() / pred.numel()
                 lr = optimizer.param_groups[0]['lr']
-                print(f'epoch: {epoch}, lr: {lr}, step: {idx}/{len(loader)}, loss: {losses / (idx + 1)}, recall: {recall.item()}, accuracy: {accu}')
+                print(f'epoch: {epoch},', 
+                f'lr: {lr}, step: {idx}/{len(loader)},',
+                f'loss: {losses / (idx + 1):.4f},', 
+                f'loss color: {losses_color / (idx + 1):.4f},',
+                f'loss type: {losses_types / (idx + 1):.4f},',
+                f'recall: {recall.item():.4f}, accuracy: {accu:.4f}')
         lr_scheduler.step()
         if rank == 0:
             if not os.path.exists('save'):
