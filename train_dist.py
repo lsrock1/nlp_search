@@ -1,6 +1,6 @@
 from dataset import CityFlowNLDataset
 from configs import get_default_config
-from model import MyModel, MyFilm
+from model import MyFilm
 from transforms import build_transforms
 from loss import TripletLoss, sigmoid_focal_loss, sampling_loss, reduce_sum, LabelSmoothingLoss
 from scheduler import WarmupMultiStepLR
@@ -29,10 +29,10 @@ def train_model_on_dataset(rank, cfg):
     cudnn.benchmark = True
     dataset = CityFlowNLDataset(cfg, build_transforms(cfg))
 
-    model = MyModel(cfg, len(dataset.nl), dataset.nl.word_to_idx['<PAD>'], norm_layer=nn.SyncBatchNorm, num_colors=len(dataset.colors), num_types=len(dataset.vehicle_type) - 2).cuda()
+    model = MyFilm(cfg, len(dataset.nl), dataset.nl.word_to_idx['<PAD>'], norm_layer=nn.SyncBatchNorm, num_colors=len(dataset.colors), num_types=len(dataset.vehicle_type) - 2).cuda()
     model = DistributedDataParallel(model, device_ids=[rank],
                                     output_device=rank,
-                                    broadcast_buffers=cfg.num_gpu > 1)
+                                    broadcast_buffers=cfg.num_gpu > 1, find_unused_parameters=False)
     optimizer = torch.optim.Adam(
             params=model.parameters(),
             lr=cfg.TRAIN.LR.BASE_LR, weight_decay=0.00003)
@@ -72,9 +72,12 @@ def train_model_on_dataset(rank, cfg):
             # global_img, local_img = global_img.cuda(), local_img.cuda()
             nl = nl.transpose(1, 0)
             frame = frame.cuda(non_blocking=True)
+            color_label = color_label.cuda(non_blocking=True)
+            type_label = type_label.cuda(non_blocking=True)
             # local_img = local_img.reshape(-1, 3, cfg.DATA.LOCAL_CROP_SIZE[0], cfg.DATA.LOCAL_CROP_SIZE[1])
             # global_img = global_img.reshape(-1, 3, cfg.DATA.GLOBAL_SIZE[0], cfg.DATA.GLOBAL_SIZE[1])
             output, color, types = model(nl, frame, label)
+            
             # label_nl = torch.arange(nl.shape[0]).cuda()
             # label_img = label_nl.unsqueeze(1).expand(-1, cfg.DATA.NUM_IMG).flatten(start_dim=0).cuda()
             # loss, prec = triplet(nl, img_ft, label_nl, label_img)
@@ -87,8 +90,8 @@ def train_model_on_dataset(rank, cfg):
             num_pos_avg_per_gpu = max(total_num_pos / float(cfg.num_gpu), 1.0)
 
             loss = sigmoid_focal_loss(output, label, reduction='sum') / num_pos_avg_per_gpu
-            loss_color = color_loss(color, color_label.cuda())
-            loss_type = vehicle_loss(types, type_label.cuda())
+            loss_color = color_loss(color, color_label)
+            loss_type = vehicle_loss(types, type_label)
             loss_total = loss + loss_color + loss_type
             optimizer.zero_grad()
             loss_total.backward()
@@ -100,20 +103,23 @@ def train_model_on_dataset(rank, cfg):
             losses_types += loss_type.item()
             # precs += recall.item()
             
-            if rank == 0:
+            if rank == 0 and idx % cfg.TRAIN.PRINT_FREQ == 0:
                 pred = (output.sigmoid() > 0.5)
                 # print((pred == label).sum())
                 pred = (pred == label) 
                 recall = (pred * label).sum() / label.sum()
-
-                accu = pred.sum().item() / pred.numel()
+                ca = (color.argmax(dim=1) == color_label)
+                ca = ca.sum().item() / ca.numel()
+                ta = (types.argmax(dim=1) == type_label)
+                ta = ta.sum().item() / ta.numel()
+                # accu = pred.sum().item() / pred.numel()
                 lr = optimizer.param_groups[0]['lr']
                 print(f'epoch: {epoch},', 
                 f'lr: {lr}, step: {idx}/{len(loader)},',
                 f'loss: {losses / (idx + 1):.4f},', 
                 f'loss color: {losses_color / (idx + 1):.4f},',
                 f'loss type: {losses_types / (idx + 1):.4f},',
-                f'recall: {recall.item():.4f}, accuracy: {accu:.4f}')
+                f'recall: {recall.item():.4f}, c_accu: {ca:.4f}, t_accu: {ta:.4f}')
         lr_scheduler.step()
         if rank == 0:
             if not os.path.exists('save'):
