@@ -125,14 +125,17 @@ class NL:
 
 
 class CityFlowNLDataset(Dataset):
+    colors = ['silver', 'red', 'white', 'brown', 'gold','black', 'gray', 'blue', 'purple', 'yellow', 'orange', 'green']
+    vehicle_type = ['bus', 'pickup','sedan', 'suv', 'van', 'wagon', 'cargo', 'mpv', 'hatchback', 'coup','truck', 'minivan']
+
     def __init__(self, data_cfg, transforms):
         """
         Dataset for training.
         :param data_cfg: CfgNode for CityFlow NL.
         """
         self.data_cfg = data_cfg.clone()
-        self.vehicle_type = ['bus', 'pickup','sedan', 'suv', 'van', 'wagon', 'cargo', 'mpv', 'hatchback', 'coup','truck', 'minivan']
-        self.colors = ['silver', 'red', 'white', 'brown', 'gold','black', 'gray', 'blue', 'purple', 'yellow', 'orange', 'green']
+        # self.vehicle_type = ['bus', 'pickup','sedan', 'suv', 'van', 'wagon', 'cargo', 'mpv', 'hatchback', 'coup','truck', 'minivan']
+        # self.colors = ['silver', 'red', 'white', 'brown', 'gold','black', 'gray', 'blue', 'purple', 'yellow', 'orange', 'green']
         with open(self.data_cfg.DATA.JSON_PATH) as f:
             tracks = json.load(f)
         self.list_of_uuids = list(tracks.keys())
@@ -178,7 +181,8 @@ class CityFlowNLDataset(Dataset):
     def __len__(self):
         return len(self.list_of_crops)
 
-    def color_replacer(self, nls):
+    @classmethod
+    def color_replacer(cls, nls):
         # cleaning noise in nl
         color_replace = {
             'reddish': 'red',
@@ -199,7 +203,7 @@ class CityFlowNLDataset(Dataset):
             # n = n.lower()
             colors_in_nl = []
             
-            for c in self.colors:
+            for c in cls.colors:
                 index = nl.find(c)
                 if index != -1:
                     # colors_in_nls.add(c)
@@ -222,12 +226,13 @@ class CityFlowNLDataset(Dataset):
                     new_nls.append(n.replace(c, representer_color))
                 else:
                     new_nls.append(n)
-            return new_nls, self.colors.index(representer_color)
+            return new_nls, cls.colors.index(representer_color)
         elif len(colors_in_nls) == 0:
             return nls, -1
-        return nls, self.colors.index(colors_in_nls[0])
+        return nls, cls.colors.index(colors_in_nls[0])
 
-    def type_replacer(self, nls):
+    @classmethod
+    def type_replacer(cls, nls):
         # cleaning noise in nl
         type_replace = {'hatckback': 'hatchback'}
         types_in_nls = []
@@ -245,7 +250,7 @@ class CityFlowNLDataset(Dataset):
         for nl in nls:
             types_in_nl = []
             
-            for c in self.vehicle_type:
+            for c in cls.vehicle_type:
                 index = nl.find(c)
                 if index != -1:
                     # colors_in_nls.add(c)
@@ -274,10 +279,10 @@ class CityFlowNLDataset(Dataset):
                     new_nls.append(n.replace(c, representer_color))
                 else:
                     new_nls.append(n)
-            return new_nls, self.vehicle_type.index(representer_color)
+            return new_nls, cls.vehicle_type.index(representer_color)
         elif len(types_in_nls) == 0:
             return nls, -1
-        return nls, self.vehicle_type.index(types_in_nls[0])
+        return nls, cls.vehicle_type.index(types_in_nls[0])
 
     def bbox_aug(self, img, bbox, h, w):
         resized_h = int(h * 0.8)
@@ -402,6 +407,7 @@ class CityFlowNLInferenceDataset(Dataset):
         boxes = []
         paths = []
         rois = []
+        labels = []
         for idx, (frame_path, box) in enumerate(zip(dp["frames"], dp["boxes"])):
             if self.num_frames != None and len(frames) == self.num_frames:
                 break
@@ -431,6 +437,9 @@ class CityFlowNLInferenceDataset(Dataset):
             ymin, ymax = int(ymin * h_ratio // 16), int(ymax * h_ratio // 16)
             xmin, xmax = int(xmin * w_ratio // 16), int(xmax * w_ratio // 16)
             rois.append([xmin, ymin, xmax, ymax])
+            label = torch.zeros([1, self.data_cfg.DATA.GLOBAL_SIZE[0]//16, self.data_cfg.DATA.GLOBAL_SIZE[1]//16])
+            label[:, ymin:ymax, xmin:xmax] = 1
+            labels.append(label)
             # box = dp["boxes"][frame_idx]
             # crop = frame[box[1]:box[1] + box[3], box[0]: box[0] + box[2], :]
             # crop = cv2.resize(crop, dsize=self.data_cfg.CROP_SIZE)
@@ -439,7 +448,7 @@ class CityFlowNLInferenceDataset(Dataset):
             # cropped_frames.append(crop)
         # dp["crops"] = torch.stack(cropped_frames, dim=0)
         frames = torch.stack(frames, dim=0)
-        return id, frames, np.array(boxes), paths, np.array(rois)
+        return id, frames, np.array(boxes), paths, np.array(rois), torch.stack(labels, dim=0)
 
 
 def query(data_cfg):

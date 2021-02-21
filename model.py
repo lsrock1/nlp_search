@@ -149,7 +149,7 @@ class FilmBlock(nn.Module):
 
 
 class MyFilm(nn.Module):
-    def __init__(self, cfg, num_words, padding_idx, norm_layer, num_colors, num_types):
+    def __init__(self, cfg, num_words, padding_idx, norm_layer=None, num_colors=None, num_types=None):
         super().__init__()
         if norm_layer == None:
             norm_layer = nn.BatchNorm2d
@@ -176,21 +176,23 @@ class MyFilm(nn.Module):
         if norm_layer == nn.BatchNorm2d:
             norm_layer = nn.BatchNorm1d
 
-        self.color = nn.Sequential(
-            norm_layer(2048), nn.Linear(2048, num_colors),
-            # norm_layer(1024), nn.ReLU(True),
-            # nn.Linear(1024, 512), norm_layer(512), nn.ReLU(True),
-            # nn.Linear(512, num_colors)
-        )
-        self.types = nn.Sequential(
-            norm_layer(2048), nn.Linear(2048, num_types),
-            # norm_layer(1024), nn.ReLU(True),
-            # nn.Linear(1024, 512), norm_layer(512), nn.ReLU(True),
-            # nn.Linear(512, num_types)
-        )
+        if num_colors != None:
+            self.color = nn.Sequential(
+                norm_layer(2048), nn.Linear(2048, num_colors),
+                # norm_layer(1024), nn.ReLU(True),
+                # nn.Linear(1024, 512), norm_layer(512), nn.ReLU(True),
+                # nn.Linear(512, num_colors)
+            )
+            self.types = nn.Sequential(
+                norm_layer(2048), nn.Linear(2048, num_types),
+                # norm_layer(1024), nn.ReLU(True),
+                # nn.Linear(1024, 512), norm_layer(512), nn.ReLU(True),
+                # nn.Linear(512, num_types)
+            )
 
     def forward(self, nl, img, activation_map=None):
-        nl = self.rnn(nl)
+        if self.training:
+            nl = self.rnn(nl)
         img = self.stem(img)
         img = self.film1(img, nl)
         img = self.film2(img, nl)
@@ -198,7 +200,14 @@ class MyFilm(nn.Module):
         img = self.film4(img, nl)
 
         if not self.training:
-            return self.out(img)#.sigmoid()
+            pred_map = self.out(img)
+            pred_map = pred_map.sigmoid()
+            # mask = pred_map > 0.8
+            vectors = (img * activation_map).sum(dim=(2, 3)) / activation_map.sum(dim=(2, 3))
+            color = self.color(vectors)
+            types = self.types(vectors)
+            return pred_map, F.softmax(color, dim=-1), F.softmax(types, dim=-1)
+            # return self.out(img)#.sigmoid()
         else:
             pred_map = self.out(img)
             vectors = (img * activation_map).sum(dim=(2, 3)) / activation_map.sum(dim=(2, 3))

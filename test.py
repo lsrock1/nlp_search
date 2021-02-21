@@ -1,6 +1,6 @@
 from dataset import CityFlowNLDataset, CityFlowNLInferenceDataset, query
 from configs import get_default_config
-from model import MyModel
+from model import MyFilm
 from transforms import build_transforms
 from loss import TripletLoss, sigmoid_focal_loss
 from utils import compute_probability_of_activations, save_img
@@ -26,7 +26,7 @@ num_of_vehicles = 64
 
 cfg = get_default_config()
 dataset = CityFlowNLInferenceDataset(cfg, build_transforms(cfg), num_of_vehicles)
-model = MyModel(cfg, len(dataset.nl), dataset.nl.word_to_idx['<PAD>']).cuda()
+model = MyFilm(cfg, len(dataset.nl), dataset.nl.word_to_idx['<PAD>'],num_colors=len(CityFlowNLDataset.colors), num_types=len(CityFlowNLDataset.vehicle_type) - 2).cuda()
 
 loader = DataLoader(dataset, batch_size=1, shuffle=False, num_workers=4)
 uuids, nls = query(cfg)
@@ -37,7 +37,7 @@ n = {}
 for k, v in saved_dict.items():
     n[k.replace('module.', '')] = v
 
-model.load_state_dict(n)
+model.load_state_dict(n, False)
 model.eval()
 
 if os.path.exists('results'):
@@ -54,35 +54,12 @@ if not os.path.exists(f'cache/{epoch}'):
     os.mkdir(f'cache/{epoch}')
 
     with torch.no_grad():
-        print('save image features..')
-        for idx, (id, frames, boxes, paths, rois) in enumerate(tqdm(loader)):
-            frames = frames.squeeze(0).cuda()
-            b = frames.shape[0]
-            cache = []
-
-            # version 3
-            # if b <= test_batch_size:
-            #     cache = model.cnn(frames)
-            #     torch.save(cache, f'cache/{epoch}/{idx}_0.pth')
-            # else:
-            #     cache = []
-            for i, f in enumerate(frames.split(test_batch_size)):
-                cache = model.cnn(f)
-                torch.save(cache, f'cache/{epoch}/{idx}_{i}.pth')
-
-            # version 2
-            # b = num_of_vehicles if num_of_vehicles <= b else b
-            # cache = model.cnn(frames[0: b])
-            # torch.save(cache, f'cache/{epoch}/{idx}.pth')
-
-            # version 1
-            # for batch_idx in range(b):
-            #     cache.append(model.cnn(frames[batch_idx:batch_idx+1]))
-            # torch.save(torch.cat(cache, dim=0), f'cache/{epoch}/{idx}.pth')
 
         print('saving language features..')
         for uuid, query_nl in zip(uuids, nls):
             nls_list = []
+            query_nl, vehicle_type = CityFlowNLDataset.type_replacer(query_nl)
+            query_nl, vehicle_color = CityFlowNLDataset.color_replacer(query_nl)
             for nl in query_nl:
                 nl = torch.tensor(dataset.nl.sentence_to_index(nl, is_train=False)).cuda()
                 # nls.append(nl.unsqueeze(0).transpose(1, 0))
@@ -90,45 +67,50 @@ if not os.path.exists(f'cache/{epoch}'):
                 # bs, len, dim
                 nl = model.rnn(nl)
                 nls_list.append(nl)
-            torch.save(nls_list, f'cache/{epoch}/{uuid}.pth')
+            saved_nls = {
+                'nls': nls_list,
+                'type': vehicle_type, 'color': vehicle_color
+            }
+            torch.save(saved_nls, f'cache/{epoch}/{uuid}.pth')
 
-dataset.load_frame = False
+# dataset.load_frame = False
 
 mem = {}
 for nlidx, (uuid, query_nl) in enumerate(zip(uuids, nls)):
     print(f'{nlidx} / {len(nls)}')
     cache_nl = torch.load(f'cache/{epoch}/{uuid}.pth')
-
+    cache_nl, vehicle_type, vehicle_color = cache_nl['nls'], cache_nl['type'], cache_nl['color']
     # nls = []
     # for nl in query_nl:
     #     nl = torch.tensor(dataset.nl.sentence_to_index(nl, is_train=False)).cuda()
     #     nls.append(nl.unsqueeze(0).transpose(1, 0))
-    for idx, (id, frames, boxes, paths, rois) in enumerate(tqdm(loader)):
+    for idx, (id, frames, boxes, paths, rois, labels) in enumerate(tqdm(loader)):
         with torch.no_grad():
             boxes = boxes.squeeze(0).numpy()
             rois = rois.squeeze(0).numpy()
             # print(rois)
-            # frames = frames.squeeze(0)
+            frames = frames.squeeze(0)
             # print(frames.shape)
             # b = frames.shape[0]
+            labels = labels.squeeze(0)
             text = query_nl[0]
             
             # if idx in mem:
             #     cache = mem[idx]
             # else:
             
-            if num_of_vehicles == None:
-                # version 3
-                results = []
-                caches = sorted(glob(f'cache/{epoch}/{idx}_*'), key = lambda x: int(x.split('_')[-1][:-4]))
-                for cache_path in caches:
-                    c = torch.load(cache_path)
+            # if num_of_vehicles == None:
+            #     # version 3
+            #     results = []
+            #     caches = sorted(glob(f'cache/{epoch}/{idx}_*'), key = lambda x: int(x.split('_')[-1][:-4]))
+            #     for cache_path in caches:
+            #         c = torch.load(cache_path)
 
-                    output = model(cache_nl[0].expand(c.shape[0], -1, -1), c).sigmoid() +\
-                            model(cache_nl[1].expand(c.shape[0], -1, -1), c).sigmoid() +\
-                            model(cache_nl[2].expand(c.shape[0], -1, -1), c).sigmoid()
-                    results.append(output / 3)
-                results = torch.cat(results, dim=0).cpu().detach().numpy()
+            #         output = model(cache_nl[0].expand(c.shape[0], -1, -1), c).sigmoid() +\
+            #                 model(cache_nl[1].expand(c.shape[0], -1, -1), c).sigmoid() +\
+            #                 model(cache_nl[2].expand(c.shape[0], -1, -1), c).sigmoid()
+            #         results.append(output / 3)
+            #     results = torch.cat(results, dim=0).cpu().detach().numpy()
                 # cache = torch.load(f'cache/{epoch}/{idx}.pth')
                 # b = cache.shape[0]
                 # if b <= test_batch_size:
@@ -145,13 +127,41 @@ for nlidx, (uuid, query_nl) in enumerate(zip(uuids, nls)):
                 #     output = model(cache_nl[0], cache[batch_idx:batch_idx+1]).sigmoid()
                 #     results.append(output.squeeze(0).cpu().detach().numpy())
             
-            else:
+            # else:
                 # version 2
-                cache = torch.load(f'cache/{epoch}/{idx}_0.pth')
-                cache = cache[:num_of_vehicles]
+            # cache = torch.load(f'cache/{epoch}/{idx}_0.pth')
+            results = []
+            cs = []
+            vs = []
+            nl1 = cache_nl[0]
+            nl2 = cache_nl[1]
+            nl3 = cache_nl[2]
+            for frame, label in zip(frames.split(num_of_vehicles, dim=0), labels.split(num_of_vehicles, dim=0)):
+                frame = frame.cuda()
+                label = label.cuda()
+                # cache = cache[:num_of_vehicles]
                 # print(cache.shape)
-                nl = cache_nl[0].expand(cache.shape[0], -1, -1)
-                results = model(nl.cuda(), cache.cuda()).sigmoid().cpu().detach().numpy()
+                if nl1.shape[0] != frame.shape[0]:
+                    nl1 = cache_nl[0].expand(frame.shape[0], -1, -1).cuda()
+                    nl2 = cache_nl[1].expand(frame.shape[0], -1, -1).cuda()
+                    nl3 = cache_nl[2].expand(frame.shape[0], -1, -1).cuda()
+
+                am1, c1, v1 = model(nl1, frame, label)
+                am2, c2, v2 = model(nl2, frame, label)
+                am3, c3, v3 = model(nl3, frame, label)
+                activation_aggregation = (am1 + am2 + am3) / 3
+                c_aggregation = (c1 + c2 + c3) / 3
+                v_aggregation = (v1 + v2 + v3) / 3
+                # activation_aggregation = model(nl1, frame) +\
+                #     model(nl2, frame) +\
+                #     model(nl3, frame)
+                # activation_aggregation = activation_aggregation / 3
+                results.append(activation_aggregation.cpu().detach().numpy())
+                cs.append(c_aggregation.cpu().detach().numpy())
+                vs.append(v_aggregation.cpu().detach().numpy())
+            results = np.concatenate(results, axis=0)
+            cs = np.mean(np.concatenate(cs, axis=0), axis=0)
+            vs = np.mean(np.concatenate(vs, axis=0), axis=0)
             
             # version 1
             # cache = torch.load(f'cache/{epoch}/{idx}.pth')
@@ -165,6 +175,11 @@ for nlidx, (uuid, query_nl) in enumerate(zip(uuids, nls)):
             if not os.path.exists('results/' + query_nl[0]):
                 os.mkdir('results/' + query_nl[0])
             if prob >= total_threshold:
+                cs = np.argmax(cs)
+                cs = CityFlowNLDataset.colors[cs]
+                vs = np.argmax(vs)
+                vs = CityFlowNLDataset.vehicle_type[vs]
+                print(f'color: {cs}, type: {vs}')
                 save_img(np.squeeze(results[0], axis=0) * 255, cv2.imread(paths[0][0]), boxes[0], f"results/{query_nl[0]}/{idx}_{prob}.png")
             # for i, o in enumerate(results):
             #     # print(paths)
