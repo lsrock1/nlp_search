@@ -55,7 +55,7 @@ class RNN(nn.Module):
         self.pos_encoder = PositionalEncoding(cfg.MODEL.RNN.HIDDEN, max_len=30)
         self.embedding = nn.Embedding(num_words, cfg.MODEL.RNN.HIDDEN)
         self.rnn = nn.TransformerEncoder(
-            nn.TransformerEncoderLayer(d_model=cfg.MODEL.RNN.HIDDEN, nhead=4),
+            nn.TransformerEncoderLayer(d_model=cfg.MODEL.RNN.HIDDEN, nhead=8),
             num_layers=cfg.MODEL.RNN.LAYERS
         )
         self.src_mask = None
@@ -87,86 +87,104 @@ class RNN(nn.Module):
         x = self.rnn(x, self.src_mask, src_key_padding_mask=mask)
         length, bs, emb = x.shape
         return x.permute(1, 0, 2)
+        # global_ratio = self.linears[1](x.reshape(-1, emb)).reshape(length, bs, 1)
+        # global_ratio = F.softmax(global_ratio, dim=0)
+  
+        # local_ratio = self.linears[2](x.reshape(-1, emb)).reshape(length, bs, 1)
+        # local_ratio = F.softmax(local_ratio, dim=0)
+        # x = self.linears[0](x.reshape(-1, emb)).reshape(length, bs, -1)
+        # global_feature = (global_ratio * x).sum(dim=0)
+        # local_vector = (local_ratio * x).sum(dim=0)
+        # return torch.cat([global_feature, local_vector], dim=-1)
+
+
+class CNN(nn.Module):
+    def __init__(self, cfg, norm_layer):
+        super().__init__()
+        self.cfg = cfg
+        # self.global_embedding = models.vgg16(pretrained=True).features
+        self.global_embedding = models.resnet50(pretrained=True, norm_layer=norm_layer)
+        self.global_embedding.layer4[0].conv2.stride = 1
+        self.global_embedding.layer4[0].downsample[0].stride = 1
+        self.global_embedding = nn.Sequential(
+            self.global_embedding.conv1,
+            self.global_embedding.bn1,
+            self.global_embedding.relu,
+            self.global_embedding.maxpool,
+            self.global_embedding.layer1,
+            self.global_embedding.layer2,
+            self.global_embedding.layer3,
+            self.global_embedding.layer4
+        )
+        #
+        # self.local_embedding = models.resnet50(pretrained=True)
+        # self.local_embedding = nn.Sequential(
+        #     self.local_embedding.conv1,
+        #     self.local_embedding.bn1,
+        #     self.local_embedding.relu,
+        #     self.local_embedding.maxpool,
+        #     self.local_embedding.layer1,
+        #     self.local_embedding.layer2,
+        #     self.local_embedding.layer3,
+        #     self.local_embedding.layer4, nn.AdaptiveAvgPool2d(1), nn.Flatten(start_dim=1)
+        # )
+        # self.local_embedding = nn.Sequential(
+        #    models.vgg16(pretrained=True).features, nn.AdaptiveAvgPool2d(1), nn.Flatten(start_dim=1))
+
+        # self.linears = nn.ModuleList([
+        #     nn.Conv2d(512, cfg.MODEL.CNN.ATTN_CHANNEL, 1), nn.Linear(512, cfg.MODEL.CNN.ATTN_CHANNEL)])
+        # self.out_linear = nn.ModuleList([
+        #     nn.Conv2d(512, cfg.MODEL.CNN.ATTN_CHANNEL, 1), nn.Linear(512, cfg.MODEL.CNN.ATTN_CHANNEL)])
+
+    def forward(self, global_img):
+        return self.global_embedding(global_img)
+        # global_feature = self.global_embedding(global_img)
+        # local_vector = self.local_embedding(local_img)
+
+        # weights = self.linears[0](global_feature).flatten(start_dim=2).permute(0, 2, 1).bmm(
+        #     self.linears[1](local_vector).unsqueeze(-1)).permute(0, 2, 1)
+        # weights = F.conv2d(self.linears[0](global_feature), local_vector).flatten(start_dim=2)
+        # weights = F.softmax(weights, dim=-1)
+        # print(weights.shape)
+        # print(global_feature.shape)
+        # global_feature = self.out_linear[0](global_feature).flatten(start_dim=2) * weights
+        # global_feature = global_feature.sum(dim=-1)
+
+        # return torch.cat([global_feature, self.out_linear[1](local_vector.flatten(start_dim=1))], dim=1)
 
 
 class SELayer(nn.Module):
-    def __init__(self, channel, out_channel, reduction=16):
+    def __init__(self, channel, reduction=16):
         super(SELayer, self).__init__()
         self.avg_pool = nn.AdaptiveAvgPool2d(1)
         self.fc = nn.Sequential(
-            nn.Linear(channel, out_channel // reduction),
+            nn.Linear(channel, channel // reduction),
             nn.ReLU(inplace=True),
-            nn.Linear(out_channel // reduction, out_channel),
+            nn.Linear(channel // reduction, channel),
+            nn.Sigmoid()
         )
 
     def forward(self, x):
-        y = self.fc(x)
+        b, t, c = x.size()
+        y = x.mean(dim=1)
+        # y = self.avg_pool(x).view(b, c)
+        y = self.fc(y)
         return y
 
 
-class FilmBlock(nn.Module):
-    def __init__(self, block, rnn_dim, in_channel, channel, h, w, spatial=True, has_pos=True):
-        super(FilmBlock, self).__init__()
-        self.block = block
-        self.channel = channel
-        self.has_spatial = spatial
-        self.has_pos = has_pos
-        if spatial:
-            self.embeddings = nn.ModuleList([
-                nn.Conv2d(channel, channel, 1),
-                nn.Linear(rnn_dim, channel),
-                nn.Linear(rnn_dim, channel)
-            ])
-        self.se = SELayer(rnn_dim, channel * 2)
-        if has_pos:
-            self.pos = PositionalEncoding2D(in_channel, h, w)
-
-    def forward(self, x, nl):
-        if self.has_pos:
-            x = self.pos(x)
-        x = self.block(x)
-        bs, c, h, w = x.shape
-        # bs, c, hw
-        x_a = self.embeddings[0](x).reshape(bs, c, -1)
-        # bs, len, c
-        nl_a = self.embeddings[1](nl)
-        # bs, len, hw
-        weights = nl_a.bmm(x_a)
-
-        # bs, c, h, w
-        # (bs, c, len) @ (bs, len, hw)
-        x = self.embeddings[2](nl).permute(0, 2, 1).bmm(F.softmax(weights, dim=1)).reshape(bs, c, h, w) + x
-        
-        # bs, len, c
-        # (bs, len, hw) @ (bs, hw, c)
-        # nl = F.softmax(weights, dim=-1).bmm(self.embeddings[3](x).reshape(bs, -1, h*w).permute(0, 2, 1)) + nl
-        
-        nl = nl.mean(dim=1)
-        # x = x + self.embeddings[4](nl).reshape(bs, -1, 1, 1)
-        alpha, beta = self.se(nl).split(self.channel, dim=1)
-        x = x * alpha.reshape(bs, self.channel, 1, 1) + beta.reshape(bs, self.channel, 1, 1)
-        return x
-
-
-class MyFilm(nn.Module):
-    def __init__(self, cfg, num_words, padding_idx, norm_layer=None, num_colors=None, num_types=None):
+class MyModel(nn.Module):
+    def __init__(self, cfg, num_words, padding_idx, norm_layer, num_colors, num_types):
         super().__init__()
         if norm_layer == None:
             norm_layer = nn.BatchNorm2d
         self.rnn = RNN(cfg, num_words, padding_idx)
-        h, w = cfg.DATA.GLOBAL_SIZE
-        cnn = models.resnet50(pretrained=True, norm_layer=norm_layer)
-        cnn.layer4[0].conv2.stride = 1
-        cnn.layer4[0].downsample[0].stride = 1
+        self.cnn = CNN(cfg, norm_layer)
+        self.a = nn.Linear(2048, 2048)
+        self.b = nn.Conv2d(2048, 2048, 1)
+        self.c = nn.Linear(2048, 2048)
+        # self.d = nn.Conv2d(2048, 2048, 1)
 
-        self.stem = nn.Sequential(
-            cnn.conv1, cnn.bn1, cnn.relu, cnn.maxpool
-        )
-        self.film1 = FilmBlock(cnn.layer1, cfg.MODEL.RNN.HIDDEN, 64, 64 * 4, h//2, w//2, spatial=True, has_pos=True)
-        self.film2 = FilmBlock(cnn.layer2, cfg.MODEL.RNN.HIDDEN, 64 * 4, 128 * 4, h//4, w//4, spatial=True, has_pos=True)
-        self.film3 = FilmBlock(cnn.layer3, cfg.MODEL.RNN.HIDDEN, 128 * 4, 256 * 4, h//8, w//8, spatial=True, has_pos=True)
-        self.film4 = FilmBlock(cnn.layer4, cfg.MODEL.RNN.HIDDEN, 256 * 4, 512 * 4, h//8, w//8, spatial=True, has_pos=True)
-
+        self.se = SELayer(2048)
         self.out = nn.Sequential(
             nn.Conv2d(2048, 1024, 3, padding=1), norm_layer(1024), nn.ReLU(True),
             nn.Conv2d(1024, 512, 3, padding=1), norm_layer(512), nn.ReLU(True),
@@ -176,41 +194,77 @@ class MyFilm(nn.Module):
         if norm_layer == nn.BatchNorm2d:
             norm_layer = nn.BatchNorm1d
 
-        if num_colors != None:
-            self.color = nn.Sequential(
-                norm_layer(2048), nn.Linear(2048, num_colors),
-                # norm_layer(1024), nn.ReLU(True),
-                # nn.Linear(1024, 512), norm_layer(512), nn.ReLU(True),
-                # nn.Linear(512, num_colors)
-            )
-            self.types = nn.Sequential(
-                norm_layer(2048), nn.Linear(2048, num_types),
-                # norm_layer(1024), nn.ReLU(True),
-                # nn.Linear(1024, 512), norm_layer(512), nn.ReLU(True),
-                # nn.Linear(512, num_types)
-            )
+        self.color = nn.Sequential(
+            nn.Linear(2048, 1024), norm_layer(1024), nn.ReLU(True),
+            nn.Linear(1024, num_colors)
+        )
+        self.types = nn.Sequential(
+            nn.Linear(2048, 1024), norm_layer(1024), nn.ReLU(True),
+            nn.Linear(1024, num_types)
+        )
 
-    def forward(self, nl, img, activation_map=None):
+        self.pos = PositionalEncoding2D(2048, 24, 24)
+        # self.attn = nn.ModuleList([
+        #     nn.Conv2d(2048, 512, 1), nn.Conv2d(2048, 2048, 1), nn.Conv2d(2048, 2048, 1)
+        # ])
+
+    def forward(self, nl, global_img, activation_map=None):
         if self.training:
             nl = self.rnn(nl)
-        img = self.stem(img)
-        img = self.film1(img, nl)
-        img = self.film2(img, nl)
-        img = self.film3(img, nl)
-        img = self.film4(img, nl)
+            img_ft = self.cnn(global_img)
+            img_org = img_ft
+        else:
+            img_ft = global_img
+            img_org = img_ft
+        img_ft = self.pos(img_ft)
+        bs, length, emb = nl.shape
+        img_ft_b = self.b(img_ft)
+        bs, c, h, w = img_ft_b.shape
+        # bs, t, hw
+        relation = torch.bmm(self.a(nl), img_ft_b.reshape(bs, c, -1))
+        weights = F.softmax(relation, dim=1)
+        weighted_img_ft = torch.bmm(self.c(nl).permute(0, 2, 1), weights)
+        img_ft = weighted_img_ft.reshape(bs, c, h, w) + img_ft
+        
+        # weights = F.softmax(relation, dim=2)
+        # weighted_nl_ft = torch.bmm(weights, self.d(img_ft).reshape(bs, c, -1).permute(0, 2, 1))
+        # nl = weighted_nl_ft + nl
 
+        se = self.se(nl)
+
+        # nl = nl * se.unsqueeze(dim=1)
+        # nl = nl.mean(dim=1).unsqueeze(-1).unsqueeze(-1)
+        img_ft = img_ft * se.unsqueeze(dim=-1).unsqueeze(dim=-1)
+        
+        # ===== self attention =====
+        # img_ft = self.pos(img_ft)
+        # img_key = self.attn[0](img_ft).reshape(bs, 512, -1)
+        # # bs, hw, hw
+        # img_key = img_key.permute(0, 2, 1).contiguous().bmm(img_key)
+        # img_key = F.softmax(img_key, dim=-1)
+
+        # # bs, c, hw
+        # img_value = self.attn[1](img_ft).reshape(bs, 2048, -1)
+        # # bs, c, h, w
+        # img_value = img_value.bmm(img_key.permute(0, 2, 1)).reshape(bs, c, h, w)
+        # img_ft = img_ft + img_value
+        # img_ft = self.attn[2](img_ft)
+        # ===== end self attention =====
+
+        # nl = nl.reshape(nl.shape[0], -1, 1, 1)
+        # last = img_ft + nl
+        # nl = nl.expand(-1, -1, img_ft.shape[2], img_ft.shape[3])
+        # last = torch.cat([img_ft, nl], dim=1)
         if not self.training:
-            pred_map = self.out(img)
-            pred_map = pred_map.sigmoid()
-            # mask = pred_map > 0.8
-            vectors = (img * activation_map).sum(dim=(2, 3)) / activation_map.sum(dim=(2, 3))
+            pred_map = self.out(img_ft)
+            vectors = (img_org * activation_map).sum(dim=(2, 3)) / activation_map.sum(dim=(2, 3))
             color = self.color(vectors)
             types = self.types(vectors)
-            return pred_map, F.softmax(color, dim=-1), F.softmax(types, dim=-1)
-            # return self.out(img)#.sigmoid()
+            return pred_map.sigmoid(), color, types
+            return self.out(img_ft)#.sigmoid()
         else:
-            pred_map = self.out(img)
-            vectors = (img * activation_map).sum(dim=(2, 3)) / activation_map.sum(dim=(2, 3))
+            pred_map = self.out(img_ft)
+            vectors = (img_org * activation_map).sum(dim=(2, 3)) / activation_map.sum(dim=(2, 3))
             color = self.color(vectors)
             types = self.types(vectors)
             return pred_map, color, types

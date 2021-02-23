@@ -162,10 +162,10 @@ class CityFlowNLDataset(Dataset):
                 # crop = {"frame": frame_path, "nl": nl, "box": box}
                 # self.list_of_crops.append(crop)
                 # expand nls
-                nl, vehicle_type = self.type_replacer(nl)
+                nl, vehicle_type = CityFlowNLDataset.type_replacer(nl)
                 if vehicle_type == -1:
                     continue
-                nl, vehicle_color = self.color_replacer(nl)
+                nl, vehicle_color = CityFlowNLDataset.color_replacer(nl)
                 if vehicle_color == -1:
                     continue
                 # print(len(nl))
