@@ -29,7 +29,7 @@ def train_model_on_dataset(rank, cfg):
     cudnn.benchmark = True
     dataset = CityFlowNLDataset(cfg, build_transforms(cfg))
 
-    model = MyModel(cfg, len(dataset.nl), dataset.nl.word_to_idx['<PAD>'], norm_layer=nn.SyncBatchNorm, num_colors=len(dataset.colors), num_types=len(dataset.vehicle_type) - 2).cuda()
+    model = MyModel(cfg, len(dataset.nl), dataset.nl.word_to_idx['<PAD>'], norm_layer=nn.SyncBatchNorm, num_colors=len(CityFlowNLDataset.colors), num_types=len(CityFlowNLDataset.vehicle_type) - 2).cuda()
     model = DistributedDataParallel(model, device_ids=[rank],
                                     output_device=rank,
                                     broadcast_buffers=cfg.num_gpu > 1, find_unused_parameters=False)
