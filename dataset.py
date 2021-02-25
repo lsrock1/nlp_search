@@ -7,9 +7,9 @@ import json
 import os
 import random
 import numpy as np
-from collections import defaultdict
 import pickle
-from collections import Counter
+from collections import Counter, defaultdict
+import itertools
 
 import cv2
 import torch
@@ -142,7 +142,10 @@ class CityFlowNLDataset(Dataset):
         self.list_of_tracks = list(tracks.values())
         self.list_of_crops = list()
         self.nl = NL(data_cfg, self.list_of_tracks)
-
+        self.color_type_item = dict([[(c, t), []] for c in range(len(CityFlowNLDataset.colors)) for t in range(len(CityFlowNLDataset.vehicle_type)-2)])
+        # self.color_type_list = [[[] for _ in range(len(CityFlowNLDataset.vehicle_type)-2)] for _ in range(len(CityFlowNLDataset.colors))]
+        self.color_type_per_frame = defaultdict(set)
+        # self.type_per_frame = defaultdict(set)
         # if os.path.exists(os.path.join(self.data_cfg.DATA.DICT_PATH, 'list_of_crops.pkl')):
         #     with open(os.path.join(self.data_cfg.DATA.DICT_PATH, 'list_of_crops.pkl'), 'rb') as handle:
         #         self.list_of_crops = pickle.load(handle)
@@ -170,9 +173,14 @@ class CityFlowNLDataset(Dataset):
                     continue
                 # print(len(nl))
                 # print(nl)
+                self.color_type_per_frame[frame_path].add((vehicle_color, vehicle_type))
+                # self.type_per_frame[frame_path].add(vehicle_type)
                 for n in nl:
                     crop = {"frame": frame_path, "nl": n, "box": box, "color": vehicle_color, "type": vehicle_type}
                     self.list_of_crops.append(crop)
+                    self.color_type_item[(vehicle_color, vehicle_type)].append(
+                        len(self.list_of_crops) - 1
+                    )
             # with open(os.path.join(self.data_cfg.DATA.DICT_PATH, 'list_of_crops.pkl'), 'wb') as handle:
             #     pickle.dump(self.list_of_crops, handle, protocol=pickle.HIGHEST_PROTOCOL)
         self.transforms = transforms
@@ -333,30 +341,38 @@ class CityFlowNLDataset(Dataset):
         h, w, _ = frame.shape
         box = dp["box"]
         frame, box = self.bbox_aug(frame, box, h, w)
-        
-        # if random.random() > 0.9:
-        #     # random nl
-        #     dp = random.choice(self.list_of_crops)
-        #     nl = dp["nl"]#[int(random.uniform(0, 3))]
-        #     # nl = self.nl.sentence_to_index(nl)
-        #     return torch.tensor(nl), frame, torch.zeros([1, self.data_cfg.DATA.GLOBAL_SIZE[0]//16, self.data_cfg.DATA.GLOBAL_SIZE[1]//16])
-        
-        nl = dp["nl"]#[0][int(random.uniform(0, 3))]
-        # print(nl)
-        nl = self.nl.sentence_to_index(nl)
+        color, typ = dp['color'], dp['type']
+
         ymin, ymax = box[1], box[1] + box[3]
         xmin, xmax = box[0], box[0] + box[2]
-        # frame = self.transforms(frame)
         xmin, xmax, ymin, ymax = int(xmin//16), int(xmax//16), int(ymin//16), int(ymax//16)
-        # h_ratio = self.data_cfg.DATA.GLOBAL_SIZE[0] / h
-        # w_ratio = self.data_cfg.DATA.GLOBAL_SIZE[1] / w
-        # ymin, ymax = int(ymin * h_ratio / 16), int(ymax * h_ratio / 16)
-        # xmin, xmax = int(xmin * w_ratio / 16), int(xmax * w_ratio / 16)
 
         label = torch.zeros([1, self.data_cfg.DATA.GLOBAL_SIZE[0]//16, self.data_cfg.DATA.GLOBAL_SIZE[1]//16])
         label[:, ymin:ymax, xmin:xmax] = 1
 
-        return torch.tensor(nl), frame, label, dp['color'], dp['type']
+        if random.random() >= 0.75:# and len(self.color_type_list[color][typ]) > 1:
+            # different type same color
+            selected_items = []
+            for combination, l in self.color_type_item.items():
+                if combination not in self.color_type_per_frame and (combination[0] == color or combination[1] == typ):
+                    selected_items.append(l)
+            # dtsc = [self.color_type_list[color][t] for t in range(len(self.color_type_list[color])) if t not in self.color_type_per_frame[dp['frame']][color] and len(self.color_type_list[color][t]) > 1]
+            # same type different color
+            # stdc = [self.color_type_list[c][typ] for c in range(len(self.color_type_list)) if typ not in self.color_type_per_frame[dp['frame']][c] and len(self.color_type_list[c][typ]) > 1]
+            new_dp_idx = random.choice(list(itertools.chain(*selected_items)))
+            
+            dp = self.list_of_crops[new_dp_idx]
+            nl = dp["nl"]#[int(random.uniform(0, 3))]
+            nl = self.nl.sentence_to_index(nl)
+            label_ = torch.zeros([1, self.data_cfg.DATA.GLOBAL_SIZE[0]//16, self.data_cfg.DATA.GLOBAL_SIZE[1]//16])
+
+            return torch.tensor(nl), frame, label_, label, color, typ
+        
+        nl = dp["nl"]#[0][int(random.uniform(0, 3))]
+        # print(nl)
+        nl = self.nl.sentence_to_index(nl)
+        
+        return torch.tensor(nl), frame, label, label, color, typ
 
 
 class CityFlowNLInferenceDataset(Dataset):

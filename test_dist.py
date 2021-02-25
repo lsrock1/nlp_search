@@ -23,7 +23,7 @@ import json
 
 
 def main():
-    epoch = 19
+    epoch = 13
     test_batch_size = 64
     scene_threshold = 0.8
     total_threshold = 0.5
@@ -31,31 +31,21 @@ def main():
 
     cfg = get_default_config()
     dataset = CityFlowNLInferenceDataset(cfg, build_transforms(cfg), num_of_vehicles)
-    model = MyModel(cfg, len(dataset.nl), dataset.nl.word_to_idx['<PAD>'], nn.BatchNorm2d, num_colors=len(CityFlowNLDataset.colors), num_types=len(CityFlowNLDataset.vehicle_type) - 2).cuda()
 
     loader = DataLoader(dataset, batch_size=1, shuffle=False, num_workers=4)
     uuids, nls = query(cfg)
 
-    saved_dict = torch.load(f'save/{epoch}.pth')
-
-    n = {}
-    for k, v in saved_dict.items():
-        n[k.replace('module.', '')] = v
-
-    model.load_state_dict(n, False)
-    model.eval()
-
     if os.path.exists('results'):
         shutil.rmtree('results')
     os.mkdir('results')
-    extract_cache_features(model, epoch, loader, dataset, test_batch_size, uuids, nls)
+    extract_cache_features(cfg, epoch, loader, dataset, test_batch_size, uuids, nls)
     cfg.num_gpu = torch.cuda.device_count()
     cfg.resume_epoch = 0
     mp.spawn(test, args=(cfg, loader, dataset, epoch, uuids, nls, scene_threshold),
                  nprocs=cfg.num_gpu, join=True)
 
 
-def extract_cache_features(model, epoch, loader, dataset, test_batch_size, uuids, nls):
+def extract_cache_features(cfg, epoch, loader, dataset, test_batch_size, uuids, nls):
     # extract img fts first to save time
     if not os.path.exists('cache'):
         # shutil.rmtree('cache')
@@ -63,7 +53,15 @@ def extract_cache_features(model, epoch, loader, dataset, test_batch_size, uuids
 
     if not os.path.exists(f'cache/{epoch}'):
         os.mkdir(f'cache/{epoch}')
+        model = MyModel(cfg, len(dataset.nl), dataset.nl.word_to_idx['<PAD>'], nn.BatchNorm2d, num_colors=len(CityFlowNLDataset.colors), num_types=len(CityFlowNLDataset.vehicle_type) - 2).cuda()
+        saved_dict = torch.load(f'save/{epoch}.pth')
 
+        n = {}
+        for k, v in saved_dict.items():
+            n[k.replace('module.', '')] = v
+
+        model.load_state_dict(n, False)
+        model.eval()
         with torch.no_grad():
             for idx, (id, frames, boxes, paths, rois, _) in enumerate(tqdm(loader)):
                 frames = frames.squeeze(0).cuda()
@@ -187,26 +185,43 @@ def test(rank, cfg, loader, dataset, epoch, uuids, nls, scene_threshold):
                 #     results.append(output.squeeze(0).cpu().detach().numpy())
 
                 prob = compute_probability_of_activations(results, rois, scene_threshold)
+                
+                # if vehicle_type != -1 and np.argmax(vs) != vehicle_type:
+                #     prob = 0.
+                # if vehicle_color != -1 and np.argmax(cs) != vehicle_color:
+                #     prob = 0.
+
+                ###### visualization
+                if not os.path.exists('results/' + query_nl[0]):
+                    os.mkdir('results/' + query_nl[0])
+                
+                cs = np.argmax(cs)
+                cs = CityFlowNLDataset.colors[cs]
+                vs = np.argmax(vs)
+                vs = CityFlowNLDataset.vehicle_type[vs]
+                if prob >= 0.2:
+                    
+                    print(f'color: {cs}, type: {vs}')
+                    save_img(np.squeeze(results[0], axis=0) * 255, cv2.imread(paths[0][0]), boxes[0], f"results/{query_nl[0]}/{idx}_{prob}.png")
+                
+                ###### end visualization
+
+
                 # for submission
-                # check color and type
-                if vehicle_type != -1 and np.argmax(vs) != vehicle_type:
-                    prob = 0.
-                if vehicle_color != -1 and np.argmax(cs) != vehicle_color:
-                    prob = 0.
-                uuids_per_nl.append(id[0])
-                prob_per_nl.append(prob)
+        #         uuids_per_nl.append(id[0])
+        #         prob_per_nl.append(prob)
         
-        uuids_per_nl = np.array(uuids_per_nl)
-        # print(uuids_per_nl.shape)
-        prob_per_nl = np.array(prob_per_nl)
-        prob_per_nl_arg = (-prob_per_nl).argsort(axis=0)
-        sorted_uuids_per_nl = uuids_per_nl[prob_per_nl_arg]
-        # print(prob_per_nl[prob_per_nl_arg])
-        final_results[uuid] = sorted_uuids_per_nl.tolist()
-        print(len(final_results.keys()))
+        # uuids_per_nl = np.array(uuids_per_nl)
+        # # print(uuids_per_nl.shape)
+        # prob_per_nl = np.array(prob_per_nl)
+        # prob_per_nl_arg = (-prob_per_nl).argsort(axis=0)
+        # sorted_uuids_per_nl = uuids_per_nl[prob_per_nl_arg]
+        # # print(prob_per_nl[prob_per_nl_arg])
+        # final_results[uuid] = sorted_uuids_per_nl.tolist()
+        # print(len(final_results.keys()))
         
-        with open(f'results/submit_{epoch}_{start}_{end_str}.json', 'w') as fp:
-            json.dump(final_results, fp)
+        # with open(f'results/submit_{epoch}_{start}_{end_str}.json', 'w') as fp:
+        #     json.dump(final_results, fp)
 
 
 if __name__ == '__main__':

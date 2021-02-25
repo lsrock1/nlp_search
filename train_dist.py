@@ -63,12 +63,13 @@ def train_model_on_dataset(rank, cfg):
         losses_types = 0.
         precs = 0.
         train_sampler.set_epoch(epoch)
-        for idx, (nl, frame, label, color_label, type_label) in enumerate(loader):
+        for idx, (nl, frame, label, act_map, color_label, type_label) in enumerate(loader):
             # print(nl.shape)
             # print(global_img.shape)
             # print(local_img.shape)
             nl = nl.cuda(non_blocking=True)
             label = label.cuda(non_blocking=True)
+            act_map = act_map.cuda(non_blocking=True)
             # global_img, local_img = global_img.cuda(), local_img.cuda()
             nl = nl.transpose(1, 0)
             frame = frame.cuda(non_blocking=True)
@@ -76,8 +77,18 @@ def train_model_on_dataset(rank, cfg):
             type_label = type_label.cuda(non_blocking=True)
             # local_img = local_img.reshape(-1, 3, cfg.DATA.LOCAL_CROP_SIZE[0], cfg.DATA.LOCAL_CROP_SIZE[1])
             # global_img = global_img.reshape(-1, 3, cfg.DATA.GLOBAL_SIZE[0], cfg.DATA.GLOBAL_SIZE[1])
-            output, color, types = model(nl, frame, label)
+            output, color, types = model(nl, frame, act_map)
             
+            # filtering -1 color and type
+            # mask = color_label > 0
+            # mask = mask.nonzero().squeeze(-1)
+
+            # color = color[mask, :]
+            # types = types[mask, :]
+            # color_label = color_label[mask]
+            # type_label = type_label[mask]
+            # print(color.shape, ' ', color_label.shape)
+ 
             # label_nl = torch.arange(nl.shape[0]).cuda()
             # label_img = label_nl.unsqueeze(1).expand(-1, cfg.DATA.NUM_IMG).flatten(start_dim=0).cuda()
             # loss, prec = triplet(nl, img_ft, label_nl, label_img)

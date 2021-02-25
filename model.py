@@ -257,14 +257,14 @@ class MyModel(nn.Module):
         # last = torch.cat([img_ft, nl], dim=1)
         if not self.training:
             pred_map = self.out(img_ft)
-            vectors = (img_org * activation_map).sum(dim=(2, 3)) / activation_map.sum(dim=(2, 3))
+            vectors = (img_org * activation_map).sum(dim=(2, 3)) / (activation_map.sum(dim=(2, 3))+ 1e-7)
             color = self.color(vectors)
             types = self.types(vectors)
             return pred_map.sigmoid(), color, types
             return self.out(img_ft)#.sigmoid()
         else:
             pred_map = self.out(img_ft)
-            vectors = (img_org * activation_map).sum(dim=(2, 3)) / activation_map.sum(dim=(2, 3))
+            vectors = (img_org * activation_map).sum(dim=(2, 3)) / (activation_map.sum(dim=(2, 3))+ 1e-7)
             color = self.color(vectors)
             types = self.types(vectors)
             return pred_map, color, types
