@@ -79,22 +79,6 @@ def train_model_on_dataset(rank, cfg):
             # global_img = global_img.reshape(-1, 3, cfg.DATA.GLOBAL_SIZE[0], cfg.DATA.GLOBAL_SIZE[1])
             output, color, types = model(nl, frame, act_map)
             
-            # filtering -1 color and type
-            # mask = color_label > 0
-            # mask = mask.nonzero().squeeze(-1)
-
-            # color = color[mask, :]
-            # types = types[mask, :]
-            # color_label = color_label[mask]
-            # type_label = type_label[mask]
-            # print(color.shape, ' ', color_label.shape)
- 
-            # label_nl = torch.arange(nl.shape[0]).cuda()
-            # label_img = label_nl.unsqueeze(1).expand(-1, cfg.DATA.NUM_IMG).flatten(start_dim=0).cuda()
-            # loss, prec = triplet(nl, img_ft, label_nl, label_img)
-            # print(label.sum(), ' ', (label == 0).sum())
-            
-            # print(pred.sum(), ' ', label.sum())
             # loss = sampling_loss(output, label)
             # loss = F.binary_cross_entropy_with_logits(output, label)
             total_num_pos = reduce_sum(label.new_tensor([label.sum()])).item()

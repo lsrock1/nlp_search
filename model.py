@@ -214,6 +214,13 @@ class MyModel(nn.Module):
             img_ft = self.cnn(global_img)
             img_org = img_ft
         else:
+            # caching
+            if not torch.is_tensor(nl):
+                img_ft = self.cnn(global_img)
+                vectors = (img_ft * activation_map).sum(dim=(2, 3)) / (activation_map.sum(dim=(2, 3))+ 1e-7)
+                color = self.color(vectors)
+                types = self.types(vectors)
+                return img_ft, color, types
             img_ft = global_img
             img_org = img_ft
         img_ft = self.pos(img_ft)
@@ -257,10 +264,10 @@ class MyModel(nn.Module):
         # last = torch.cat([img_ft, nl], dim=1)
         if not self.training:
             pred_map = self.out(img_ft)
-            vectors = (img_org * activation_map).sum(dim=(2, 3)) / (activation_map.sum(dim=(2, 3))+ 1e-7)
-            color = self.color(vectors)
-            types = self.types(vectors)
-            return pred_map.sigmoid(), color, types
+            # vectors = (img_org * activation_map).sum(dim=(2, 3)) / (activation_map.sum(dim=(2, 3))+ 1e-7)
+            # color = self.color(vectors)
+            # types = self.types(vectors)
+            return pred_map.sigmoid()#, color, types
             return self.out(img_ft)#.sigmoid()
         else:
             pred_map = self.out(img_ft)

@@ -23,10 +23,10 @@ import json
 
 
 def main():
-    epoch = 13
+    epoch = 9
     test_batch_size = 64
-    scene_threshold = 0.8
-    total_threshold = 0.5
+    scene_threshold = 0.5
+    total_threshold = 0.0
     num_of_vehicles = 64
 
     cfg = get_default_config()
@@ -41,7 +41,7 @@ def main():
     extract_cache_features(cfg, epoch, loader, dataset, test_batch_size, uuids, nls)
     cfg.num_gpu = torch.cuda.device_count()
     cfg.resume_epoch = 0
-    mp.spawn(test, args=(cfg, loader, dataset, epoch, uuids, nls, scene_threshold),
+    mp.spawn(test, args=(cfg, loader, dataset, epoch, uuids, nls, scene_threshold, total_threshold),
                  nprocs=cfg.num_gpu, join=True)
 
 
@@ -63,10 +63,11 @@ def extract_cache_features(cfg, epoch, loader, dataset, test_batch_size, uuids, 
         model.load_state_dict(n, False)
         model.eval()
         with torch.no_grad():
-            for idx, (id, frames, boxes, paths, rois, _) in enumerate(tqdm(loader)):
+            for idx, (id, frames, _, _, _, labels) in enumerate(tqdm(loader)):
                 frames = frames.squeeze(0).cuda()
-                b = frames.shape[0]
-                cache = []
+                labels = labels.squeeze(0).cuda()
+                # b = frames.shape[0]
+                # cache = []
 
                 # version 3
                 # if b <= test_batch_size:
@@ -74,9 +75,17 @@ def extract_cache_features(cfg, epoch, loader, dataset, test_batch_size, uuids, 
                 #     torch.save(cache, f'cache/{epoch}/{idx}_0.pth')
                 # else:
                 #     cache = []
-                for i, f in enumerate(frames.split(test_batch_size)):
-                    cache = model.cnn(f)
+                for i, (f, l) in enumerate(zip(frames.split(test_batch_size), labels.split(test_batch_size))):
+                    cache = model(None, f, l)
+                    img_ft = cache[0]
+                    color = cache[1].mean(dim=0).cpu().numpy()
+                    typ = cache[2].mean(dim=0).cpu().numpy()
+                    color = np.argmax(color)
+                    typ = np.argmax(typ)
+
+                    cache = [img_ft, color, typ]
                     torch.save(cache, f'cache/{epoch}/{idx}_{i}.pth')
+                    break
 
             print('saving language features..')
             for uuid, query_nl in zip(uuids, nls):
@@ -96,9 +105,12 @@ def extract_cache_features(cfg, epoch, loader, dataset, test_batch_size, uuids, 
                     'type': vehicle_type, 'color': vehicle_color
                 }
                 torch.save(saved_nls, f'cache/{epoch}/{uuid}.pth')
+        # model = model.cpu()
+        del model, saved_dict, n, nls_list, img_ft
+        torch.cuda.empty_cache()
 
 
-def test(rank, cfg, loader, dataset, epoch, uuids, nls, scene_threshold):
+def test(rank, cfg, loader, dataset, epoch, uuids, nls, scene_threshold, total_threshold):
     dataset.load_frame = False
     dist.init_process_group(backend="nccl", rank=rank,
                             world_size=cfg.num_gpu,
@@ -142,11 +154,16 @@ def test(rank, cfg, loader, dataset, epoch, uuids, nls, scene_threshold):
                 labels = labels.squeeze(0)
                 labels = labels.cuda()
 
-                frame = torch.load(f'cache/{epoch}/{idx}_0.pth', map_location=torch.device(f'cuda:{rank}'))
+                cache = torch.load(f'cache/{epoch}/{idx}_0.pth', map_location=torch.device(f'cuda:{rank}'))
+                # print(cache)
+                frame, cs, vs = cache
+                # if vehicle_type != -1 and vs != vehicle_type:
+                #     continue
+                # if vehicle_color != -1 and cs != vehicle_color:
+                #     continue
                 # print(frame.device)
-                results = []
-                cs = []
-                vs = []
+                # results = []
+                
                 nl1 = cache_nl[0]
                 nl2 = cache_nl[1]
                 nl3 = cache_nl[2]
@@ -159,12 +176,15 @@ def test(rank, cfg, loader, dataset, epoch, uuids, nls, scene_threshold):
                     nl2 = cache_nl[1].expand(bs, -1, -1).cuda()
                     nl3 = cache_nl[2].expand(bs, -1, -1).cuda()
 
-                am1, c1, v1 = model(nl1, frame, labels)
-                am2, c2, v2 = model(nl2, frame, labels)
-                am3, c3, v3 = model(nl3, frame, labels)
+                am1 = model(nl1, frame, labels)
+                am2 = model(nl2, frame, labels)
+                am3 = model(nl3, frame, labels)
+                # am1, c1, v1 = model(nl1, frame, labels)
+                # am2, c2, v2 = model(nl2, frame, labels)
+                # am3, c3, v3 = model(nl3, frame, labels)
                 activation_aggregation = (am1 + am2 + am3) / 3
-                c_aggregation = (c1 + c2 + c3) / 3
-                v_aggregation = (v1 + v2 + v3) / 3
+                # c_aggregation = (c1 + c2 + c3) / 3
+                # v_aggregation = (v1 + v2 + v3) / 3
                 # activation_aggregation = model(nl1, frame) +\
                 #     model(nl2, frame) +\
                 #     model(nl3, frame)
@@ -174,8 +194,8 @@ def test(rank, cfg, loader, dataset, epoch, uuids, nls, scene_threshold):
                 # vs.append(v_aggregation)
 
                 results = activation_aggregation.cpu().numpy()
-                cs = c_aggregation.mean(dim=0).cpu().numpy()
-                vs = v_aggregation.mean(dim=0).cpu().numpy()
+                # cs = c_aggregation.mean(dim=0).cpu().numpy()
+                # vs = v_aggregation.mean(dim=0).cpu().numpy()
                 
                 # version 1
                 # cache = torch.load(f'cache/{epoch}/{idx}.pth')
@@ -192,36 +212,38 @@ def test(rank, cfg, loader, dataset, epoch, uuids, nls, scene_threshold):
                 #     prob = 0.
 
                 ###### visualization
-                if not os.path.exists('results/' + query_nl[0]):
-                    os.mkdir('results/' + query_nl[0])
+                # if not os.path.exists('results/' + query_nl[0]):
+                #     os.mkdir('results/' + query_nl[0])
                 
-                cs = np.argmax(cs)
-                cs = CityFlowNLDataset.colors[cs]
-                vs = np.argmax(vs)
-                vs = CityFlowNLDataset.vehicle_type[vs]
-                if prob >= 0.2:
+                # # cs = np.argmax(cs)
+                # cs = cs.item()
+                # vs = vs.item()
+                # cs = CityFlowNLDataset.colors[cs]
+                # # vs = np.argmax(vs)
+                # vs = CityFlowNLDataset.vehicle_type[vs]
+                # if prob > total_threshold:
                     
-                    print(f'color: {cs}, type: {vs}')
-                    save_img(np.squeeze(results[0], axis=0) * 255, cv2.imread(paths[0][0]), boxes[0], f"results/{query_nl[0]}/{idx}_{prob}.png")
+                #     print(f'color: {cs}, type: {vs}')
+                #     save_img(np.squeeze(results[0], axis=0) * 255, cv2.imread(paths[0][0]), boxes[0], f"results/{query_nl[0]}/{idx}_{prob}.png")
                 
                 ###### end visualization
 
 
                 # for submission
-        #         uuids_per_nl.append(id[0])
-        #         prob_per_nl.append(prob)
+                uuids_per_nl.append(id[0])
+                prob_per_nl.append(prob)
         
-        # uuids_per_nl = np.array(uuids_per_nl)
-        # # print(uuids_per_nl.shape)
-        # prob_per_nl = np.array(prob_per_nl)
-        # prob_per_nl_arg = (-prob_per_nl).argsort(axis=0)
-        # sorted_uuids_per_nl = uuids_per_nl[prob_per_nl_arg]
-        # # print(prob_per_nl[prob_per_nl_arg])
-        # final_results[uuid] = sorted_uuids_per_nl.tolist()
-        # print(len(final_results.keys()))
+        uuids_per_nl = np.array(uuids_per_nl)
+        # print(uuids_per_nl.shape)
+        prob_per_nl = np.array(prob_per_nl)
+        prob_per_nl_arg = (-prob_per_nl).argsort(axis=0)
+        sorted_uuids_per_nl = uuids_per_nl[prob_per_nl_arg]
+        # print(prob_per_nl[prob_per_nl_arg])
+        final_results[uuid] = sorted_uuids_per_nl.tolist()
+        print(len(final_results.keys()))
         
-        # with open(f'results/submit_{epoch}_{start}_{end_str}.json', 'w') as fp:
-        #     json.dump(final_results, fp)
+        with open(f'results/submit_{epoch}_{start}_{end_str}.json', 'w') as fp:
+            json.dump(final_results, fp)
 
 
 if __name__ == '__main__':

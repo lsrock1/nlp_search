@@ -354,7 +354,8 @@ class CityFlowNLDataset(Dataset):
             # different type same color
             selected_items = []
             for combination, l in self.color_type_item.items():
-                if combination not in self.color_type_per_frame and (combination[0] == color or combination[1] == typ):
+                if combination not in self.color_type_per_frame[dp["frame"]] and (combination[0] == color or combination[1] == typ):
+                    # print(f"{color}, {typ}", ' ', combination)
                     selected_items.append(l)
             # dtsc = [self.color_type_list[color][t] for t in range(len(self.color_type_list[color])) if t not in self.color_type_per_frame[dp['frame']][color] and len(self.color_type_list[color][t]) > 1]
             # same type different color
