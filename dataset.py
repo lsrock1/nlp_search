@@ -367,13 +367,13 @@ class CityFlowNLDataset(Dataset):
             nl = self.nl.sentence_to_index(nl)
             label_ = torch.zeros([1, self.data_cfg.DATA.GLOBAL_SIZE[0]//16, self.data_cfg.DATA.GLOBAL_SIZE[1]//16])
 
-            return torch.tensor(nl), frame, label_, label, color, typ
+            return torch.tensor(nl), frame, label_, label, color, typ, dp['color'], dp['type']
         
         nl = dp["nl"]#[0][int(random.uniform(0, 3))]
         # print(nl)
         nl = self.nl.sentence_to_index(nl)
         
-        return torch.tensor(nl), frame, label, label, color, typ
+        return torch.tensor(nl), frame, label, label, color, typ, color, typ
 
 
 class CityFlowNLInferenceDataset(Dataset):

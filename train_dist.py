@@ -61,9 +61,11 @@ def train_model_on_dataset(rank, cfg):
         losses = 0.
         losses_color = 0.
         losses_types = 0.
+        losses_nl_color = 0.
+        losses_nl_types = 0.
         precs = 0.
         train_sampler.set_epoch(epoch)
-        for idx, (nl, frame, label, act_map, color_label, type_label) in enumerate(loader):
+        for idx, (nl, frame, label, act_map, color_label, type_label, nl_color_label, nl_type_label) in enumerate(loader):
             # print(nl.shape)
             # print(global_img.shape)
             # print(local_img.shape)
@@ -75,9 +77,9 @@ def train_model_on_dataset(rank, cfg):
             frame = frame.cuda(non_blocking=True)
             color_label = color_label.cuda(non_blocking=True)
             type_label = type_label.cuda(non_blocking=True)
-            # local_img = local_img.reshape(-1, 3, cfg.DATA.LOCAL_CROP_SIZE[0], cfg.DATA.LOCAL_CROP_SIZE[1])
-            # global_img = global_img.reshape(-1, 3, cfg.DATA.GLOBAL_SIZE[0], cfg.DATA.GLOBAL_SIZE[1])
-            output, color, types = model(nl, frame, act_map)
+            nl_color_label = nl_color_label.cuda(non_blocking=True)
+            nl_type_label = nl_type_label.cuda(non_blocking=True)
+            output, color, types, nl_color, nl_types = model(nl, frame, act_map)
             
             # loss = sampling_loss(output, label)
             # loss = F.binary_cross_entropy_with_logits(output, label)
@@ -85,9 +87,11 @@ def train_model_on_dataset(rank, cfg):
             num_pos_avg_per_gpu = max(total_num_pos / float(cfg.num_gpu), 1.0)
 
             loss = sigmoid_focal_loss(output, label, reduction='sum') / num_pos_avg_per_gpu
-            loss_color = color_loss(color, color_label)
-            loss_type = vehicle_loss(types, type_label)
-            loss_total = loss + loss_color + loss_type
+            loss_color = color_loss(color, color_label) * cfg.TRAIN.ALPHA_COLOR
+            loss_type = vehicle_loss(types, type_label) * cfg.TRAIN.ALPHA_TYPE
+            loss_nl_color = color_loss(nl_color, nl_color_label) * cfg.TRAIN.ALPHA_NL_COLOR
+            loss_nl_type = vehicle_loss(nl_types, nl_type_label) * cfg.TRAIN.ALPHA_NL_TYPE
+            loss_total = loss + loss_color + loss_type + loss_nl_color + loss_nl_type
             optimizer.zero_grad()
             loss_total.backward()
             # torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
@@ -96,6 +100,8 @@ def train_model_on_dataset(rank, cfg):
             losses += loss.item()
             losses_color += loss_color.item()
             losses_types += loss_type.item()
+            losses_nl_color += loss_nl_color.item()
+            losses_nl_types += loss_nl_type.item()
             # precs += recall.item()
             
             if rank == 0 and idx % cfg.TRAIN.PRINT_FREQ == 0:
@@ -114,6 +120,8 @@ def train_model_on_dataset(rank, cfg):
                 f'loss: {losses / (idx + 1):.4f},', 
                 f'loss color: {losses_color / (idx + 1):.4f},',
                 f'loss type: {losses_types / (idx + 1):.4f},',
+                f'loss nl color: {losses_nl_color / (idx + 1):.4f},',
+                f'loss nl type: {losses_nl_types / (idx + 1):.4f},',
                 f'recall: {recall.item():.4f}, c_accu: {ca:.4f}, t_accu: {ta:.4f}')
         lr_scheduler.step()
         if rank == 0:

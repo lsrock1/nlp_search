@@ -48,7 +48,7 @@ class PositionalEncoding(nn.Module):
 
 
 class RNN(nn.Module):
-    def __init__(self, cfg, num_words, padding_idx):
+    def __init__(self, cfg, num_words, padding_idx, num_colors, num_types):
         super().__init__()
         self.cfg = cfg
         self.padding_idx = padding_idx
@@ -60,6 +60,8 @@ class RNN(nn.Module):
         )
         self.src_mask = None
         self.hidden_size = cfg.MODEL.RNN.HIDDEN
+        self.color = nn.Linear(cfg.MODEL.RNN.HIDDEN, num_colors)
+        self.typ = nn.Linear(cfg.MODEL.RNN.HIDDEN, num_types)
         self.init_weights()
 
     def init_weights(self):
@@ -86,16 +88,10 @@ class RNN(nn.Module):
         x = self.pos_encoder(x)
         x = self.rnn(x, self.src_mask, src_key_padding_mask=mask)
         length, bs, emb = x.shape
+        if self.training:
+            v = x.mean(dim=0)
+            return x.permute(1, 0, 2), self.color(v), self.typ(v)
         return x.permute(1, 0, 2)
-        # global_ratio = self.linears[1](x.reshape(-1, emb)).reshape(length, bs, 1)
-        # global_ratio = F.softmax(global_ratio, dim=0)
-  
-        # local_ratio = self.linears[2](x.reshape(-1, emb)).reshape(length, bs, 1)
-        # local_ratio = F.softmax(local_ratio, dim=0)
-        # x = self.linears[0](x.reshape(-1, emb)).reshape(length, bs, -1)
-        # global_feature = (global_ratio * x).sum(dim=0)
-        # local_vector = (local_ratio * x).sum(dim=0)
-        # return torch.cat([global_feature, local_vector], dim=-1)
 
 
 class CNN(nn.Module):
@@ -177,7 +173,7 @@ class MyModel(nn.Module):
         super().__init__()
         if norm_layer == None:
             norm_layer = nn.BatchNorm2d
-        self.rnn = RNN(cfg, num_words, padding_idx)
+        self.rnn = RNN(cfg, num_words, padding_idx, num_colors, num_types)
         self.cnn = CNN(cfg, norm_layer)
         self.a = nn.Linear(2048, 2048)
         self.b = nn.Conv2d(2048, 2048, 1)
@@ -210,7 +206,7 @@ class MyModel(nn.Module):
 
     def forward(self, nl, global_img, activation_map=None):
         if self.training:
-            nl = self.rnn(nl)
+            nl, nl_color, nl_types = self.rnn(nl)
             img_ft = self.cnn(global_img)
             img_org = img_ft
         else:
@@ -222,7 +218,7 @@ class MyModel(nn.Module):
                 types = self.types(vectors)
                 return img_ft, color, types
             img_ft = global_img
-            img_org = img_ft
+            # img_org = img_ft
         img_ft = self.pos(img_ft)
         bs, length, emb = nl.shape
         img_ft_b = self.b(img_ft)
@@ -268,10 +264,9 @@ class MyModel(nn.Module):
             # color = self.color(vectors)
             # types = self.types(vectors)
             return pred_map.sigmoid()#, color, types
-            return self.out(img_ft)#.sigmoid()
         else:
             pred_map = self.out(img_ft)
             vectors = (img_org * activation_map).sum(dim=(2, 3)) / (activation_map.sum(dim=(2, 3))+ 1e-7)
             color = self.color(vectors)
             types = self.types(vectors)
-            return pred_map, color, types
+            return pred_map, color, types, nl_color, nl_types

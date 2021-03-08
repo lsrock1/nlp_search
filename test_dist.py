@@ -25,8 +25,8 @@ import json
 def main():
     epoch = 9
     test_batch_size = 64
-    scene_threshold = 0.5
-    total_threshold = 0.0
+    scene_threshold = 0.
+    total_threshold = 0.2
     num_of_vehicles = 64
 
     cfg = get_default_config()
@@ -232,16 +232,18 @@ def test(rank, cfg, loader, dataset, epoch, uuids, nls, scene_threshold, total_t
                 # for submission
                 uuids_per_nl.append(id[0])
                 prob_per_nl.append(prob)
-        
-        uuids_per_nl = np.array(uuids_per_nl)
-        # print(uuids_per_nl.shape)
-        prob_per_nl = np.array(prob_per_nl)
-        prob_per_nl_arg = (-prob_per_nl).argsort(axis=0)
-        sorted_uuids_per_nl = uuids_per_nl[prob_per_nl_arg]
-        # print(prob_per_nl[prob_per_nl_arg])
-        final_results[uuid] = sorted_uuids_per_nl.tolist()
-        print(len(final_results.keys()))
-        
+        final_results['uuids_order'] = uuids_per_nl
+        final_results[uuid] = prob_per_nl
+
+        # uuids_per_nl = np.array(uuids_per_nl)
+        # # print(uuids_per_nl.shape)
+        # prob_per_nl = np.array(prob_per_nl)
+        # prob_per_nl_arg = (-prob_per_nl).argsort(axis=0)
+        # sorted_uuids_per_nl = uuids_per_nl[prob_per_nl_arg]
+        # # print(prob_per_nl[prob_per_nl_arg])
+        # final_results[uuid] = sorted_uuids_per_nl.tolist()
+        # print(len(final_results.keys()))
+
         with open(f'results/submit_{epoch}_{start}_{end_str}.json', 'w') as fp:
             json.dump(final_results, fp)
 
