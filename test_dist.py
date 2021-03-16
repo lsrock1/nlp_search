@@ -32,7 +32,7 @@ def main():
     cfg = get_default_config()
     dataset = CityFlowNLInferenceDataset(cfg, build_transforms(cfg), num_of_vehicles)
 
-    loader = DataLoader(dataset, batch_size=1, shuffle=False, num_workers=4)
+    loader = DataLoader(dataset, batch_size=1, shuffle=False, num_workers=8)
     uuids, nls = query(cfg)
 
     if os.path.exists('results'):

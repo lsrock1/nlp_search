@@ -199,7 +199,7 @@ class MyModel(nn.Module):
             nn.Linear(1024, num_types)
         )
 
-        self.pos = PositionalEncoding2D(2048, 24, 24)
+        self.pos = PositionalEncoding2D(2048, 24, 24) # 24, 24
         # self.attn = nn.ModuleList([
         #     nn.Conv2d(2048, 512, 1), nn.Conv2d(2048, 2048, 1), nn.Conv2d(2048, 2048, 1)
         # ])

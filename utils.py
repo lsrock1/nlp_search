@@ -15,6 +15,16 @@ def compute_probability_of_activation(result, roi, threshold):
     return activation_ratio
 
 
+def compute_probability_of_point(result, roi, threshold):
+    '''
+    results: numpy array of shape (h, w)
+    roi: numpy array of shape (4) (xyxy)
+    '''
+    # print(result.shape)
+    # print(result[:, (roi[1] + roi[3])//2, (roi[0] + roi[2])//2].shape)
+    return result[:, (roi[1] + roi[3])//2, (roi[0] + roi[2])//2].item()# > threshold
+
+
 def compute_probability_of_activations(results, rois, threshold):
     total_length = len(results)
     bool_results = 0

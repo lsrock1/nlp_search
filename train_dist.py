@@ -81,7 +81,7 @@ def train_model_on_dataset(rank, cfg):
             nl_type_label = nl_type_label.cuda(non_blocking=True)
             output, color, types, nl_color, nl_types = model(nl, frame, act_map)
             
-            # loss = sampling_loss(output, label)
+            # loss = sampling_loss(output, label, ratio=5)
             # loss = F.binary_cross_entropy_with_logits(output, label)
             total_num_pos = reduce_sum(label.new_tensor([label.sum()])).item()
             num_pos_avg_per_gpu = max(total_num_pos / float(cfg.num_gpu), 1.0)

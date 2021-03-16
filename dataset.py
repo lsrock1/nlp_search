@@ -348,9 +348,10 @@ class CityFlowNLDataset(Dataset):
         xmin, xmax, ymin, ymax = int(xmin//16), int(xmax//16), int(ymin//16), int(ymax//16)
 
         label = torch.zeros([1, self.data_cfg.DATA.GLOBAL_SIZE[0]//16, self.data_cfg.DATA.GLOBAL_SIZE[1]//16])
+        # rectangle version
         label[:, ymin:ymax, xmin:xmax] = 1
 
-        if random.random() >= 0.75:# and len(self.color_type_list[color][typ]) > 1:
+        if False:#random.random() >= 0.75:# and len(self.color_type_list[color][typ]) > 1:
             # different type same color
             selected_items = []
             for combination, l in self.color_type_item.items():
@@ -455,6 +456,7 @@ class CityFlowNLInferenceDataset(Dataset):
             xmin, xmax = int(xmin * w_ratio // 16), int(xmax * w_ratio // 16)
             rois.append([xmin, ymin, xmax, ymax])
             label = torch.zeros([1, self.data_cfg.DATA.GLOBAL_SIZE[0]//16, self.data_cfg.DATA.GLOBAL_SIZE[1]//16])
+            # rectangle version
             label[:, ymin:ymax, xmin:xmax] = 1
             labels.append(label)
             # box = dp["boxes"][frame_idx]
