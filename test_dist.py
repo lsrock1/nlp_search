@@ -10,6 +10,7 @@ import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel
 import torch.multiprocessing as mp
 from torch import nn
+import torch.nn.functional as F
 from torch.utils.data import DataLoader
 import torch
 from torch.optim.lr_scheduler import MultiStepLR
@@ -78,10 +79,10 @@ def extract_cache_features(cfg, epoch, loader, dataset, test_batch_size, uuids, 
                 for i, (f, l) in enumerate(zip(frames.split(test_batch_size), labels.split(test_batch_size))):
                     cache = model(None, f, l)
                     img_ft = cache[0]
-                    color = cache[1].mean(dim=0).cpu().numpy()
-                    typ = cache[2].mean(dim=0).cpu().numpy()
-                    color = np.argmax(color)
-                    typ = np.argmax(typ)
+                    color = F.softmax(cache[1].mean(dim=0), dim=0).cpu()#.numpy()
+                    typ = F.softmax(cache[2].mean(dim=0), dim=0).cpu()#.numpy()
+                    # color = np.argmax(color)
+                    # typ = np.argmax(typ)
 
                     cache = [img_ft, color, typ]
                     torch.save(cache, f'cache/{epoch}/{idx}_{i}.pth')
