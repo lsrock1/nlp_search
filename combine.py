@@ -45,13 +45,13 @@ for uuid in nl_uuid:
     
     # color prob check
     if nl_vehicle_color != -1:
-        color_weights = vehicle_colors[:, nl_vehicle_color] * 0.5
+        color_weights = vehicle_colors[:, nl_vehicle_color] * 1.
     else:
         color_weights = 0
 
     # type prob check
     if nl_vehicle_type != -1:
-        type_weights = vehicle_types[:, nl_vehicle_type] * 0.5
+        type_weights = vehicle_types[:, nl_vehicle_type] * 1.
     else:
         type_weights = 0
 

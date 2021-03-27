@@ -351,7 +351,7 @@ class CityFlowNLDataset(Dataset):
         # rectangle version
         label[:, ymin:ymax, xmin:xmax] = 1
 
-        if False:#random.random() >= 0.75:# and len(self.color_type_list[color][typ]) > 1:
+        if random.random() >= 0.8:# and len(self.color_type_list[color][typ]) > 1:
             # different type same color
             selected_items = []
             for combination, l in self.color_type_item.items():

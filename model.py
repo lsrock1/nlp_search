@@ -164,8 +164,10 @@ class SELayer(nn.Module):
         b, t, c = x.size()
         y = x.mean(dim=1)
         # y = self.avg_pool(x).view(b, c)
-        y = self.fc(y)
+        y = self.fc(y).unsqueeze(-1).unsqueeze(-1)
         return y
+        w, b = y.split(y.shape[1]//2, dim=1)
+        return w, b
 
 
 class MyModel(nn.Module):
@@ -178,7 +180,10 @@ class MyModel(nn.Module):
         self.a = nn.Linear(2048, 2048)
         self.b = nn.Conv2d(2048, 2048, 1)
         self.c = nn.Linear(2048, 2048)
-        # self.d = nn.Conv2d(2048, 2048, 1)
+        self.d = nn.Conv2d(2048, 2048, 1)
+
+        self.e = nn.Conv2d(2048, 512, 1)
+        self.f = nn.Conv2d(2048, 2048, 1)
 
         self.se = SELayer(2048)
         self.out = nn.Sequential(
@@ -220,7 +225,8 @@ class MyModel(nn.Module):
             img_ft = global_img
             # img_org = img_ft
         img_ft = self.pos(img_ft)
-        bs, length, emb = nl.shape
+        # nl = nl.mean(dim=1)
+        # bs, emb = nl.shape
         img_ft_b = self.b(img_ft)
         bs, c, h, w = img_ft_b.shape
         # bs, t, hw
@@ -229,29 +235,29 @@ class MyModel(nn.Module):
         weighted_img_ft = torch.bmm(self.c(nl).permute(0, 2, 1), weights)
         img_ft = weighted_img_ft.reshape(bs, c, h, w) + img_ft
         
-        # weights = F.softmax(relation, dim=2)
-        # weighted_nl_ft = torch.bmm(weights, self.d(img_ft).reshape(bs, c, -1).permute(0, 2, 1))
-        # nl = weighted_nl_ft + nl
+        weights = F.softmax(relation, dim=2)
+        weighted_nl_ft = torch.bmm(weights, self.d(img_ft).reshape(bs, c, -1).permute(0, 2, 1))
+        nl = weighted_nl_ft + nl
 
-        se = self.se(nl)
+        weights = self.se(nl)
 
         # nl = nl * se.unsqueeze(dim=1)
         # nl = nl.mean(dim=1).unsqueeze(-1).unsqueeze(-1)
-        img_ft = img_ft * se.unsqueeze(dim=-1).unsqueeze(dim=-1)
+        img_ft = img_ft * weights
         
         # ===== self attention =====
         # img_ft = self.pos(img_ft)
-        # img_key = self.attn[0](img_ft).reshape(bs, 512, -1)
-        # # bs, hw, hw
-        # img_key = img_key.permute(0, 2, 1).contiguous().bmm(img_key)
-        # img_key = F.softmax(img_key, dim=-1)
+        img_key = self.e(img_ft).reshape(bs, 512, -1)
+        # bs, hw, hw
+        img_key = img_key.permute(0, 2, 1).contiguous().bmm(img_key)
+        img_key = F.softmax(img_key, dim=-1)
 
-        # # bs, c, hw
-        # img_value = self.attn[1](img_ft).reshape(bs, 2048, -1)
-        # # bs, c, h, w
-        # img_value = img_value.bmm(img_key.permute(0, 2, 1)).reshape(bs, c, h, w)
-        # img_ft = img_ft + img_value
-        # img_ft = self.attn[2](img_ft)
+        # bs, c, hw
+        img_value = self.f(img_ft).reshape(bs, c, -1)
+        # bs, c, h, w
+        img_value = img_value.bmm(img_key.permute(0, 2, 1)).reshape(bs, c, h, w)
+        img_ft = img_ft + img_value
+        # img_ft = self.g(img_ft)
         # ===== end self attention =====
 
         # nl = nl.reshape(nl.shape[0], -1, 1, 1)
