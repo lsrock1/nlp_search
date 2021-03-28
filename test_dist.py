@@ -97,7 +97,7 @@ def extract_cache_features(cfg, epoch, loader, dataset, test_batch_size, uuids, 
                 for nl in query_nl:
                     nl = torch.tensor(dataset.nl.sentence_to_index(nl, is_train=False)).cuda()
                     # nls.append(nl.unsqueeze(0).transpose(1, 0))
-                    nl = nl.unsqueeze(0).transpose(1, 0)
+                    nl = nl.unsqueeze(0)#.transpose(1, 0)
                     # bs, len, dim
                     nl = model.rnn(nl)
                     nls_list.append(nl)

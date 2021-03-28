@@ -3,6 +3,7 @@ from torch import nn
 import torchvision.models as models
 import torch.nn.functional as F
 import math
+from transformers import ElectraForPreTraining, ElectraTokenizerFast, ElectraModel
 
 
 class PositionalEncoding2D(nn.Module):
@@ -45,6 +46,27 @@ class PositionalEncoding(nn.Module):
     def forward(self, x):
         x = x + self.pe[:x.size(0), :]
         return self.dropout(x)
+
+
+class TextModel(nn.Module):
+    def __init__(self, cfg, num_words, padding_idx, num_colors, num_types):
+        super(TextModel, self).__init__()
+        self.model = ElectraModel.from_pretrained("google/electra-small-discriminator")
+        self.fc = nn.Linear(256, cfg.MODEL.RNN.HIDDEN)
+        self.color = nn.Linear(cfg.MODEL.RNN.HIDDEN, num_colors)
+        self.typ = nn.Linear(cfg.MODEL.RNN.HIDDEN, num_types)
+
+    def forward(self, x):
+        if self.training:
+            mask = (x != 0)
+            x = self.model(x, attention_mask = mask)[0]
+        else:
+            x = self.model(x)[0]
+        x = self.fc(x)
+        # bs, seq_len, emb = x.shape
+        if self.training:
+            return x, self.color(x[:, 0]), self.typ(x[:, 0]), mask.unsqueeze(-1)
+        return x
 
 
 class RNN(nn.Module):
@@ -112,41 +134,9 @@ class CNN(nn.Module):
             self.global_embedding.layer3,
             self.global_embedding.layer4
         )
-        #
-        # self.local_embedding = models.resnet50(pretrained=True)
-        # self.local_embedding = nn.Sequential(
-        #     self.local_embedding.conv1,
-        #     self.local_embedding.bn1,
-        #     self.local_embedding.relu,
-        #     self.local_embedding.maxpool,
-        #     self.local_embedding.layer1,
-        #     self.local_embedding.layer2,
-        #     self.local_embedding.layer3,
-        #     self.local_embedding.layer4, nn.AdaptiveAvgPool2d(1), nn.Flatten(start_dim=1)
-        # )
-        # self.local_embedding = nn.Sequential(
-        #    models.vgg16(pretrained=True).features, nn.AdaptiveAvgPool2d(1), nn.Flatten(start_dim=1))
-
-        # self.linears = nn.ModuleList([
-        #     nn.Conv2d(512, cfg.MODEL.CNN.ATTN_CHANNEL, 1), nn.Linear(512, cfg.MODEL.CNN.ATTN_CHANNEL)])
-        # self.out_linear = nn.ModuleList([
-        #     nn.Conv2d(512, cfg.MODEL.CNN.ATTN_CHANNEL, 1), nn.Linear(512, cfg.MODEL.CNN.ATTN_CHANNEL)])
 
     def forward(self, global_img):
         return self.global_embedding(global_img)
-        # global_feature = self.global_embedding(global_img)
-        # local_vector = self.local_embedding(local_img)
-
-        # weights = self.linears[0](global_feature).flatten(start_dim=2).permute(0, 2, 1).bmm(
-        #     self.linears[1](local_vector).unsqueeze(-1)).permute(0, 2, 1)
-        # weights = F.conv2d(self.linears[0](global_feature), local_vector).flatten(start_dim=2)
-        # weights = F.softmax(weights, dim=-1)
-        # print(weights.shape)
-        # print(global_feature.shape)
-        # global_feature = self.out_linear[0](global_feature).flatten(start_dim=2) * weights
-        # global_feature = global_feature.sum(dim=-1)
-
-        # return torch.cat([global_feature, self.out_linear[1](local_vector.flatten(start_dim=1))], dim=1)
 
 
 class SELayer(nn.Module):
@@ -160,9 +150,12 @@ class SELayer(nn.Module):
             nn.Sigmoid()
         )
 
-    def forward(self, x):
+    def forward(self, x, mask=None):
         b, t, c = x.size()
-        y = x.mean(dim=1)
+        if self.training:
+            y = (x * mask).sum(dim=1) / mask.sum(dim=1)
+        else:
+            y = x.mean(dim=1)
         # y = self.avg_pool(x).view(b, c)
         y = self.fc(y).unsqueeze(-1).unsqueeze(-1)
         return y
@@ -175,7 +168,7 @@ class MyModel(nn.Module):
         super().__init__()
         if norm_layer == None:
             norm_layer = nn.BatchNorm2d
-        self.rnn = RNN(cfg, num_words, padding_idx, num_colors, num_types)
+        self.rnn = TextModel(cfg, num_words, padding_idx, num_colors, num_types)
         self.cnn = CNN(cfg, norm_layer)
         self.a = nn.Linear(2048, 2048)
         self.b = nn.Conv2d(2048, 2048, 1)
@@ -211,7 +204,7 @@ class MyModel(nn.Module):
 
     def forward(self, nl, global_img, activation_map=None):
         if self.training:
-            nl, nl_color, nl_types = self.rnn(nl)
+            nl, nl_color, nl_types, mask = self.rnn(nl)
             img_ft = self.cnn(global_img)
             img_org = img_ft
         else:
@@ -231,6 +224,9 @@ class MyModel(nn.Module):
         bs, c, h, w = img_ft_b.shape
         # bs, t, hw
         relation = torch.bmm(self.a(nl), img_ft_b.reshape(bs, c, -1))
+        if self.training:
+            relation = relation * mask
+        
         weights = F.softmax(relation, dim=1)
         weighted_img_ft = torch.bmm(self.c(nl).permute(0, 2, 1), weights)
         img_ft = weighted_img_ft.reshape(bs, c, h, w) + img_ft
@@ -239,8 +235,10 @@ class MyModel(nn.Module):
         weighted_nl_ft = torch.bmm(weights, self.d(img_ft).reshape(bs, c, -1).permute(0, 2, 1))
         nl = weighted_nl_ft + nl
 
-        weights = self.se(nl)
-
+        if self.training:
+            weights = self.se(nl, mask)
+        else:
+            weights = self.se(nl)
         # nl = nl * se.unsqueeze(dim=1)
         # nl = nl.mean(dim=1).unsqueeze(-1).unsqueeze(-1)
         img_ft = img_ft * weights

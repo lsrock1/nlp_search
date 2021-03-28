@@ -18,6 +18,7 @@ from nltk.stem import PorterStemmer
 import albumentations as A
 import albumentations.pytorch as AP
 from nltk.corpus import stopwords
+from transformers import ElectraTokenizerFast
 # import nltk
 # nltk.download('stopwords')
 
@@ -27,6 +28,7 @@ class NL:
         self.tracks = tracks
         self.s = PorterStemmer()
         self.stop_words = set(stopwords.words('english'))
+        self.tokenizer = ElectraTokenizerFast.from_pretrained('google/electra-small-discriminator')
 
         if os.path.exists(os.path.join(self.cfg.DATA.DICT_PATH, 'word_count.pkl')):
             with open(os.path.join(self.cfg.DATA.DICT_PATH, 'word_count.pkl'), 'rb') as handle:
@@ -104,23 +106,17 @@ class NL:
                 nl = nl.replace(sc, replaced)
 
         nl = nl[:-1].replace('-', '').split()
-        nl = [self.s.stem(w) for w in nl]
-        nl = [w for w in nl if w not in self.stop_words]
+        # nl = [self.s.stem(w) for w in nl]
+        # nl = [w for w in nl if w not in self.stop_words]
         return nl
 
     def sentence_to_index(self, nl, is_train=True):
         nl = self.do_clean(nl)
-
-        idxs = [self.word_to_idx[n] if n in self.word_to_idx else self.word_to_idx['<UNK>'] for n in nl]
-        
+        str_input = ' '.join(nl)
         if is_train:
-            if len(idxs) > self.cfg.DATA.MAX_SENTENCE:
-                idxs = idxs[:self.cfg.DATA.MAX_SENTENCE]
-                idxs = [self.word_to_idx['<SOS>']] + idxs + [self.word_to_idx['<EOS>']]
-            else:
-                idxs = [self.word_to_idx['<SOS>']] + idxs + [self.word_to_idx['<EOS>']] + [self.word_to_idx['<PAD>'] for _ in range(self.cfg.DATA.MAX_SENTENCE - len(idxs))]
+            idxs = self.tokenizer.encode(str_input, padding='max_length', truncation=True, max_length=30)
         else:
-            idxs = [self.word_to_idx['<SOS>']] + idxs + [self.word_to_idx['<EOS>']]
+            idxs = self.tokenizer.encode(str_input)
         return idxs
 
 

@@ -73,7 +73,7 @@ def train_model_on_dataset(rank, cfg):
             label = label.cuda(non_blocking=True)
             act_map = act_map.cuda(non_blocking=True)
             # global_img, local_img = global_img.cuda(), local_img.cuda()
-            nl = nl.transpose(1, 0)
+            # nl = nl.transpose(1, 0)
             frame = frame.cuda(non_blocking=True)
             color_label = color_label.cuda(non_blocking=True)
             type_label = type_label.cuda(non_blocking=True)
